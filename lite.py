@@ -1,4 +1,5 @@
 """omniroute-lite: stdlib-only OpenAI-compatible router stub."""
+import store
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -20,7 +21,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION})
         if self.path == "/v1/models":
-            return self._send(200, {"object": "list", "data": []})
+            return self._send(200, {"object": "list", "data": store.model_list(store.load_targets())})
         if self.path == "/":
             html = "<pre>omniroute-lite ok\nGET /health\nGET /v1/models</pre>"
             return self._send(200, html, "text/html")
