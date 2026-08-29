@@ -1,5 +1,7 @@
 """omniroute-lite: stdlib-only OpenAI-compatible router stub."""
 import store
+import router
+import providers
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -25,6 +27,38 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/":
             html = "<pre>omniroute-lite ok\nGET /health\nGET /v1/models</pre>"
             return self._send(200, html, "text/html")
+        return self._send(404, {"error": {"message": "not found"}})
+
+    def do_POST(self):
+        if self.path == "/v1/chat/completions":
+            import json as _j
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                payload = _j.loads(self.rfile.read(n) or b"{}")
+            except Exception:
+                return self._send(400, {"error": {"message": "bad json"}})
+            model = payload.get("model", "")
+            targets = router.chain(store.load_targets(), model)
+            if not targets:
+                return self._send(503, {"error": {"message": "no targets configured"}})
+            last = (502, b'{"error":{"message":"all targets failed"}}')
+            for t in targets:
+                code, body = providers.forward(t["base_url"], t["api_key"], "/v1/chat/completions", payload)
+                if code < 500 and code != 429:
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                if code in (408, 429, 500, 502, 503, 504):
+                    router.cool(t.get("name", ""), 5)  # ponytail: fixed 5s, exponential when proven needed
+                last = (code, body)
+            code, body = last
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         return self._send(404, {"error": {"message": "not found"}})
 
     def log_message(self, *a):
