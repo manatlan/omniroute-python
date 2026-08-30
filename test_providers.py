@@ -39,3 +39,11 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class T2(unittest.TestCase):
+    def test_anthropic_roundtrip(self):
+        out = providers.to_anthropic({"model": "m", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]})
+        self.assertEqual(out["system"], "s")
+        back = providers.from_anthropic({"content": [{"type": "text", "text": "yo"}], "stop_reason": "end_turn"})
+        self.assertEqual(back["choices"][0]["message"]["content"], "yo")
