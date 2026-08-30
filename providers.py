@@ -34,3 +34,20 @@ def from_anthropic(body):
     d = _j.loads(body) if isinstance(body, (bytes, bytearray)) else body
     text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": d.get("stop_reason", "stop")}]}
+
+
+def to_gemini(payload):
+    """OpenAI chat -> Gemini generateContent. ponytail: text-only first."""
+    parts = [{"text": m.get("content", "")} for m in payload.get("messages", []) if m.get("role") in ("user", "system")]
+    return {"contents": [{"role": "user", "parts": parts}]}
+
+
+def from_gemini(body):
+    """Gemini response -> OpenAI chat shape."""
+    import json as _j
+    d = _j.loads(body) if isinstance(body, (bytes, bytearray)) else body
+    try:
+        text = "".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"])
+    except (KeyError, IndexError):
+        text = ""
+    return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}

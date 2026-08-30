@@ -47,3 +47,11 @@ class T2(unittest.TestCase):
         self.assertEqual(out["system"], "s")
         back = providers.from_anthropic({"content": [{"type": "text", "text": "yo"}], "stop_reason": "end_turn"})
         self.assertEqual(back["choices"][0]["message"]["content"], "yo")
+
+
+class T3(unittest.TestCase):
+    def test_gemini_roundtrip(self):
+        out = providers.to_gemini({"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(out["contents"][0]["parts"], [{"text": "hi"}])
+        back = providers.from_gemini({"candidates": [{"content": {"parts": [{"text": "yo"}]}}]})
+        self.assertEqual(back["choices"][0]["message"]["content"], "yo")
