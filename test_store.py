@@ -13,3 +13,14 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TCache(unittest.TestCase):
+    def test_roundtrip_and_expiry(self):
+        import tempfile, os
+        from store import cache_get, cache_set
+        p = os.path.join(tempfile.mkdtemp(), "c.db")
+        cache_set(p, "k", b"v", ttl=60)
+        self.assertEqual(cache_get(p, "k"), b"v")
+        cache_set(p, "k", b"v", ttl=-1)
+        self.assertIsNone(cache_get(p, "k"))
