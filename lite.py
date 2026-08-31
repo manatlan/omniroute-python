@@ -45,6 +45,20 @@ class Handler(BaseHTTPRequestHandler):
             for t in targets:
                 code, body = providers.call_target(t, payload)
                 if code < 500 and code != 429:
+                    import json as _jj
+                    if payload.get("stream"):
+                        # ponytail: synthesized SSE from full text, true passthrough when latency proves needed
+                        try:
+                            text = _jj.loads(body)["choices"][0]["message"]["content"]
+                        except Exception:
+                            text = ""
+                        chunk = _jj.dumps({"choices": [{"delta": {"content": text}, "finish_reason": None}]})
+                        sse = f"data: {chunk}\n\ndata: [DONE]\n\n".encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Content-Length", str(len(sse)))
+                        self.end_headers()
+                        return self.wfile.write(sse)
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))

@@ -58,3 +58,47 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TStream(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_stream_bytes(self):
+        import store as _s
+        orig = _s.load_targets
+        _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://127.0.0.1:1/v1", "api_key": "k", "models": ["m"]}]
+        import providers as _p
+        o = _p.call_target
+        _p.call_target = lambda t, p, timeout=30: (200, json.dumps({"choices": [{"message": {"content": "hello"}}]}).encode())
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps({"model": "m", "messages": [], "stream": True}), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            body = r.read().decode()
+            self.assertEqual(r.status, 200)
+            self.assertIn("text/event-stream", r.getheader("Content-Type"))
+            self.assertIn("data: [DONE]", body)
+            self.assertIn("hello", body)
+        finally:
+            _s.load_targets = orig; _p.call_target = o
+
+    def test_stream_shape(self):
+        import store as _s
+        orig = _s.load_targets
+        _s.load_targets = lambda *a: []
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps({"model": "x", "messages": [], "stream": True}), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            self.assertEqual(r.status, 503)  # no targets -> no SSE, proves wiring point
+        finally:
+            _s.load_targets = orig
