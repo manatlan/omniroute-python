@@ -51,3 +51,28 @@ def from_gemini(body):
     except (KeyError, IndexError):
         text = ""
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}
+
+
+def call_target(t, payload, timeout=30):
+    """kind-aware dispatch: openai (default) | anthropic | gemini."""
+    import json as _j
+    kind = t.get("kind", "openai")
+    if kind == "anthropic":
+        import urllib.request as _u
+        req = _u.Request(t["base_url"].rstrip("/") + "/v1/messages",
+            data=_j.dumps(to_anthropic(payload)).encode(),
+            headers={"Content-Type": "application/json", "x-api-key": t["api_key"], "anthropic-version": "2023-06-01"},
+            method="POST")
+        try:
+            with _u.urlopen(req, timeout=timeout) as r:
+                return r.status, _j.dumps(from_anthropic(r.read())).encode()
+        except _u.HTTPError as e:
+            return e.code, e.read()
+    if kind == "gemini":
+        code, body = forward(t["base_url"], t["api_key"],
+            "/v1beta/models/" + payload.get("model", "") + ":generateContent",
+            to_gemini(payload), timeout)
+        if code == 200:
+            return code, _j.dumps(from_gemini(body)).encode()
+        return code, body
+    return forward(t["base_url"], t["api_key"], "/v1/chat/completions", payload, timeout)

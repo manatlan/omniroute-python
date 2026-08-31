@@ -43,7 +43,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": {"message": "no targets configured"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
-                code, body = providers.forward(t["base_url"], t["api_key"], "/v1/chat/completions", payload)
+                code, body = providers.call_target(t, payload)
                 if code < 500 and code != 429:
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
