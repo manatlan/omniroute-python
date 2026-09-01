@@ -78,7 +78,7 @@ class TStream(unittest.TestCase):
         _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://127.0.0.1:1/v1", "api_key": "k", "models": ["m"]}]
         import providers as _p
         o = _p.call_target
-        _p.call_target = lambda t, p, timeout=30: (200, json.dumps({"choices": [{"message": {"content": "hello"}}]}).encode())
+        _p.call_target = lambda t, p, timeout=30: (200, {}, json.dumps({"choices": [{"message": {"content": "hello"}}]}).encode())
         try:
             c = HTTPConnection("127.0.0.1", self.port, timeout=5)
             c.request("POST", "/v1/chat/completions", json.dumps({"model": "m", "messages": [], "stream": True}), {"Content-Type": "application/json"})
@@ -123,7 +123,7 @@ class TCacheHit(unittest.TestCase):
         os.path.expanduser = lambda p: tmp if p == "~" else orig_home(p)
         calls = []
         o_call = _p.call_target
-        _p.call_target = lambda t, p, timeout=30: (calls.append(1) or (200, b'{"choices":[{"message":{"content":"cached"}}]}'))
+        _p.call_target = lambda t, p, timeout=30: (calls.append(1) or (200, {}, b'{"choices":[{"message":{"content":"cached"}}]}'))
         o_load = _s.load_targets
         _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://x/v1", "api_key": "k", "models": ["m"]}]
         try:

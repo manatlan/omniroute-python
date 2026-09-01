@@ -20,6 +20,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _body(self, limit=10 * 1024 * 1024):
+        """-> (payload, None) | (None, 'bad'|'large'). Bounds inbound memory."""
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return None, "bad"
+        if n > limit or n < 0:
+            return None, "large"
+        try:
+            return json.loads(self.rfile.read(n) or b"{}"), None
+        except Exception:
+            return None, "bad"
+
     def do_GET(self):
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION})
@@ -33,11 +46,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/v1/chat/completions":
             import json as _j
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                payload = _j.loads(self.rfile.read(n) or b"{}")
-            except Exception:
-                return self._send(400, {"error": {"message": "bad json"}})
+            payload, err = self._body()
+            if err:
+                return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
             if isinstance(payload.get("messages"), list):
                 payload["messages"] = compress.trim(payload["messages"])
             import hashlib as _h, os as _o
@@ -57,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": {"message": "no targets configured"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
-                code, body = providers.call_target(t, payload)
+                code, _, body = providers.call_target(t, payload)
                 if code < 500 and code != 429:
                     import json as _jj
                     if payload.get("stream"):
@@ -91,11 +102,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if self.path == "/v1/test/call":
             import json as _j, time as _t
-            try:
-                n = int(self.headers.get("Content-Length", 0))
-                payload = _j.loads(self.rfile.read(n) or b"{}")
-            except Exception:
-                return self._send(400, {"error": {"message": "bad json"}})
+            payload, err = self._body()
+            if err:
+                return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
             model = payload.get("model", "")
             targets = router.chain(store.load_targets(), model)
             if not targets:
@@ -103,7 +112,7 @@ class Handler(BaseHTTPRequestHandler):
             t = targets[0]
             probe = {"model": model or (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
             start = _t.time()
-            code, body = providers.call_target(t, probe)
+            code, _, body = providers.call_target(t, probe)
             ms = int((_t.time() - start) * 1000)
             ok = code < 500 and code != 429
             if not ok and code in (408, 429, 500, 502, 503, 504):
@@ -116,6 +125,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def run(port=20128):
+    ThreadingHTTPServer.daemon_threads = True
     ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 
 

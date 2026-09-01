@@ -20,7 +20,7 @@ class T(unittest.TestCase):
     def test_call_ok(self):
         o_load, o_call = store.load_targets, providers.call_target
         store.load_targets = lambda *a: [{"name": "u", "base_url": "http://x", "api_key": "k", "models": ["m"]}]
-        providers.call_target = lambda t, p, timeout=30: (200, b"{}")
+        providers.call_target = lambda t, p, timeout=30: (200, {}, b"{}")
         try:
             c = HTTPConnection("127.0.0.1", self.port, timeout=5)
             c.request("POST", "/v1/test/call", json.dumps({"model": "m"}), {"Content-Type": "application/json"})
