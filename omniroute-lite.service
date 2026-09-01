@@ -1,0 +1,13 @@
+[Unit]
+Description=omniroute-lite stdlib AI router
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Programs/omniroute-lite
+ExecStart=/usr/bin/python3 %h/Programs/omniroute-lite/lite.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
