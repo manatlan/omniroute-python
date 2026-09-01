@@ -89,6 +89,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             return self.wfile.write(body)
+        if self.path == "/v1/test/call":
+            import json as _j, time as _t
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                payload = _j.loads(self.rfile.read(n) or b"{}")
+            except Exception:
+                return self._send(400, {"error": {"message": "bad json"}})
+            model = payload.get("model", "")
+            targets = router.chain(store.load_targets(), model)
+            if not targets:
+                return self._send(503, {"error": {"message": "no targets configured"}})
+            t = targets[0]
+            probe = {"model": model or (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+            start = _t.time()
+            code, body = providers.call_target(t, probe)
+            ms = int((_t.time() - start) * 1000)
+            ok = code < 500 and code != 429
+            if not ok and code in (408, 429, 500, 502, 503, 504):
+                router.cool(t.get("name", ""), 5)
+            return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})
 
     def log_message(self, *a):
