@@ -102,3 +102,36 @@ class TStream(unittest.TestCase):
             self.assertEqual(r.status, 503)  # no targets -> no SSE, proves wiring point
         finally:
             _s.load_targets = orig
+
+
+class TCacheHit(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_cache_hit_skips_upstream(self):
+        import store as _s, providers as _p, tempfile, os
+        tmp = os.path.join(tempfile.mkdtemp(), "c.db")
+        orig_home = os.path.expanduser
+        os.path.expanduser = lambda p: tmp if p == "~" else orig_home(p)
+        calls = []
+        o_call = _p.call_target
+        _p.call_target = lambda t, p, timeout=30: (calls.append(1) or (200, b'{"choices":[{"message":{"content":"cached"}}]}'))
+        o_load = _s.load_targets
+        _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://x/v1", "api_key": "k", "models": ["m"]}]
+        try:
+            body = json.dumps({"model": "m", "messages": [{"role": "user", "content": "hi"}], "cache_ttl": 60})
+            for _ in range(2):
+                c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+                c.request("POST", "/v1/chat/completions", body, {"Content-Type": "application/json"})
+                self.assertEqual(c.getresponse().status, 200)
+            self.assertEqual(len(calls), 1)
+        finally:
+            os.path.expanduser = orig_home; _p.call_target = o_call; _s.load_targets = o_load

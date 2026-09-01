@@ -40,7 +40,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": {"message": "bad json"}})
             if isinstance(payload.get("messages"), list):
                 payload["messages"] = compress.trim(payload["messages"])
+            import hashlib as _h, os as _o
             model = payload.get("model", "")
+            ckey = _h.sha256(_j.dumps(payload, sort_keys=True).encode()).hexdigest() if not payload.get("stream") and payload.get("cache_ttl") else None
+            if ckey:
+                cpath = _o.path.join(_o.path.expanduser("~"), ".omniroute-lite", "cache.db")
+                hit = store.cache_get(cpath, ckey)
+                if hit:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(hit)))
+                    self.end_headers()
+                    return self.wfile.write(hit)
             targets = router.chain(store.load_targets(), model)
             if not targets:
                 return self._send(503, {"error": {"message": "no targets configured"}})
@@ -62,6 +73,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.send_header("Content-Length", str(len(sse)))
                         self.end_headers()
                         return self.wfile.write(sse)
+                    if ckey and code == 200:
+                        store.cache_set(cpath, ckey, body, ttl=int(payload.get("cache_ttl", 300)))
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
