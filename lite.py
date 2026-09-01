@@ -2,6 +2,7 @@
 import store
 import router
 import providers
+import compress
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -37,6 +38,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = _j.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 return self._send(400, {"error": {"message": "bad json"}})
+            if isinstance(payload.get("messages"), list):
+                payload["messages"] = compress.trim(payload["messages"])
             model = payload.get("model", "")
             targets = router.chain(store.load_targets(), model)
             if not targets:
