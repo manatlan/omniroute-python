@@ -27,3 +27,30 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TBackoff(unittest.TestCase):
+    def setUp(self):
+        router._cool_until.clear(); router._fails.clear()
+
+    def test_backoff_doubles(self):
+        router.cool("a"); first = router._cool_until["a"]
+        router._cool_until.clear()
+        router.cool("a"); second = router._cool_until["a"]
+        import time
+        self.assertAlmostEqual(second - time.time(), 2 * (first - time.time()), delta=2)
+
+    def test_retry_after_wins(self):
+        router.cool("a", base=5, retry_after=60)
+        import time
+        self.assertGreater(router._cool_until["a"] - time.time(), 50)
+
+    def test_success_resets(self):
+        router.cool("a"); router.note_success("a")
+        self.assertFalse(router.is_cool("a"))
+        self.assertNotIn("a", router._fails)
+
+    def test_parse_delta(self):
+        self.assertEqual(router.parse_retry_after({"retry-after": "120"}), 120)
+        self.assertIsNone(router.parse_retry_after({}))
+        self.assertIsNone(router.parse_retry_after({"retry-after": "garbage-date!!"}))

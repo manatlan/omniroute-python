@@ -68,8 +68,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": {"message": "no targets configured"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
-                code, _, body = providers.call_target(t, payload)
+                code, hdrs, body = providers.call_target(t, payload)
                 if code < 500 and code != 429:
+                    router.note_success(t.get("name", ""))
                     import json as _jj
                     if payload.get("stream"):
                         # ponytail: synthesized SSE from full text, true passthrough when latency proves needed
@@ -92,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return self.wfile.write(body)
                 if code in (408, 429, 500, 502, 503, 504):
-                    router.cool(t.get("name", ""), 5)  # ponytail: fixed 5s, exponential when proven needed
+                    router.cool(t.get("name", ""), 5, router.parse_retry_after(hdrs))
                 last = (code, body)
             code, body = last
             self.send_response(code)
@@ -112,11 +113,13 @@ class Handler(BaseHTTPRequestHandler):
             t = targets[0]
             probe = {"model": model or (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
             start = _t.time()
-            code, _, body = providers.call_target(t, probe)
+            code, hdrs, body = providers.call_target(t, probe)
             ms = int((_t.time() - start) * 1000)
             ok = code < 500 and code != 429
-            if not ok and code in (408, 429, 500, 502, 503, 504):
-                router.cool(t.get("name", ""), 5)
+            if ok:
+                router.note_success(t.get("name", ""))
+            elif code in (408, 429, 500, 502, 503, 504):
+                router.cool(t.get("name", ""), 5, router.parse_retry_after(hdrs))
             return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})
 
