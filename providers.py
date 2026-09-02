@@ -127,3 +127,53 @@ def call_target(t, payload, timeout=30):
         return code, h, body
     # openai + ollama (ollama: api_key empty/"-" omits auth)
     return forward(t["base_url"], t.get("api_key", "-"), "/v1/chat/completions", payload, timeout)
+
+
+def post_stream(url, headers, body, timeout=30, chunk=65536):
+    """-> (200, headers, chunk-iterator) or (errcode, headers, error-bytes). Never raises."""
+    import urllib.parse as _up
+    import http.client as _hc
+    sp = _up.urlsplit(url)
+    scheme, host = sp.scheme, sp.hostname
+    port = sp.port or (443 if scheme == "https" else 80)
+    path = sp.path or "/"
+    if sp.query:
+        path += "?" + sp.query
+    conn = _take(scheme, host, port, timeout)
+    try:
+        conn.request("POST", path, body=body, headers=headers)
+        r = conn.getresponse()
+        h = {k.lower(): v for k, v in r.getheaders()}
+        if r.status != 200:
+            data = r.read(MAX_BODY + 1)
+            conn.close()
+            return r.status, h, data
+        def gen():
+            try:
+                while True:
+                    b = r.read(chunk)
+                    if not b:
+                        break
+                    yield b
+            finally:
+                conn.close()
+        return r.status, h, gen()
+    except (OSError, _hc.HTTPException):
+        try:
+            conn.close()
+        except OSError:
+            pass
+        return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
+
+
+def stream_target(t, payload, timeout=30):
+    """openai-shape SSE relay -> (status, headers, iterator|bytes)."""
+    kind = t.get("kind", "openai")
+    if kind == "azure":
+        ver = t.get("api_version", "2024-06-01")
+        return post_stream(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/chat/completions?api-version=" + ver,
+            {"Content-Type": "application/json", "api-key": t["api_key"]},
+            json.dumps({**payload, "stream": True}).encode(), timeout)
+    return post_stream(t["base_url"].rstrip("/") + "/v1/chat/completions",
+        {"Content-Type": "application/json", **({"Authorization": f"Bearer {t['api_key']}"} if t.get("api_key") and t.get("api_key") != "-" else {})},
+        json.dumps({**payload, "stream": True}).encode(), timeout)

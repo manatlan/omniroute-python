@@ -75,7 +75,7 @@ class TStream(unittest.TestCase):
     def test_stream_bytes(self):
         import store as _s
         orig = _s.load_targets
-        _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://127.0.0.1:1/v1", "api_key": "k", "models": ["m"]}]
+        _s.load_targets = lambda *a: [{"name": "u", "kind": "anthropic", "base_url": "http://127.0.0.1:1/v1", "api_key": "k", "models": ["m"]}]
         import providers as _p
         o = _p.call_target
         _p.call_target = lambda t, p, timeout=30: (200, {}, json.dumps({"choices": [{"message": {"content": "hello"}}]}).encode())
@@ -179,3 +179,52 @@ class TFailover(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertTrue(router.model_locked("a", "m"))
         self.assertFalse(router.is_cool("a"))  # key itself still usable
+
+
+class TPassthrough(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from http.server import BaseHTTPRequestHandler
+
+        class SSEUp(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(n)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(b"data: 1\n\ndata: 2\n\ndata: [DONE]\n\n")))
+                self.end_headers()
+                for part in (b"data: 1\n\n", b"data: 2\n\n", b"data: [DONE]\n\n"):
+                    self.wfile.write(part)
+                    self.wfile.flush()
+
+            def log_message(self, *a):
+                pass
+
+        cls.up = ThreadingHTTPServer(("127.0.0.1", 0), SSEUp)
+        cls.uport = cls.up.server_address[1]
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.up.serve_forever, daemon=True).start()
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.up.shutdown(); cls.srv.shutdown()
+
+    def test_relay_order_and_done(self):
+        import store as _s
+        o = _s.load_targets
+        _s.load_targets = lambda *a: [{"name": "u", "kind": "openai", "base_url": f"http://127.0.0.1:{self.uport}/v1", "api_key": "k", "models": ["m"]}]
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps({"model": "m", "messages": [], "stream": True}), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            body = r.read().decode()
+            self.assertEqual(r.status, 200)
+            self.assertEqual(body, "data: 1\n\ndata: 2\n\ndata: [DONE]\n\n")
+        finally:
+            _s.load_targets = o

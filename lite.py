@@ -68,8 +68,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"error": {"message": "no targets configured"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
-                code, hdrs, body = providers.call_target(t, payload)
                 name = t.get("name", "")
+                if payload.get("stream") and t.get("kind", "openai") in ("openai", "ollama", "azure"):
+                    scode, hdrs, chunks = providers.stream_target(t, payload)
+                    if scode == 200:
+                        router.note_success(name)
+                        router.note_provider_ok(t)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                        try:
+                            for b in chunks:
+                                self.wfile.write(b)
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+                        return
+                    code, body = scode, chunks
+                else:
+                    code, hdrs, body = providers.call_target(t, payload)
                 if code not in router.FAILOVER:
                     router.note_success(name)
                     router.note_provider_ok(t)
