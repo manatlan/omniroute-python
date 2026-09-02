@@ -135,3 +135,47 @@ class TCacheHit(unittest.TestCase):
             self.assertEqual(len(calls), 1)
         finally:
             os.path.expanduser = orig_home; _p.call_target = o_call; _s.load_targets = o_load
+
+
+class TFailover(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        router._reset()
+
+    def _post(self, payload, targets, by_name):
+        import store as _s, providers as _p
+        o_load, o_call = _s.load_targets, _p.call_target
+        _s.load_targets = lambda *a: targets
+        _p.call_target = lambda t, p, timeout=30: by_name[t["name"]]
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps(payload), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            return r.status, r.read()
+        finally:
+            _s.load_targets, _p.call_target = o_load, o_call
+
+    def test_401_fails_over_to_next_key(self):
+        ts = [{"name": "a", "models": ["m"]}, {"name": "b", "models": ["m"]}]
+        code, body = self._post({"model": "m", "messages": []}, ts,
+            {"a": (401, {}, b"nope"), "b": (200, {}, b'{"choices":[]}')} )
+        self.assertEqual(code, 200)
+        self.assertTrue(router.is_cool("a"))
+
+    def test_404_locks_model_only(self):
+        ts = [{"name": "a", "models": ["m"]}, {"name": "b", "models": ["m"]}]
+        code, _ = self._post({"model": "m", "messages": []}, ts,
+            {"a": (404, {}, b"nope"), "b": (200, {}, b'{"choices":[]}')})
+        self.assertEqual(code, 200)
+        self.assertTrue(router.model_locked("a", "m"))
+        self.assertFalse(router.is_cool("a"))  # key itself still usable

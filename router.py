@@ -41,17 +41,63 @@ def is_cool(name):
     return _cool_until.get(name, 0) > time.time()
 
 
+FAILOVER = (401, 403, 404, 408, 429, 500, 502, 503, 504)
+BRK_THRESHOLD = 5
+BRK_RESET = 30
+
+_brk = {}    # provider -> [fails, opened_until]; lazy recovery, no timers
+_mlock = {}  # (name, model) -> until
+
+
+def _reset():
+    _cool_until.clear(); _fails.clear(); _brk.clear(); _mlock.clear()
+
+
+def _prov(t):
+    return t.get("provider", t.get("name", ""))
+
+
+def breaker_open(t):
+    fails, until = _brk.get(_prov(t), (0, 0))
+    if until > time.time():
+        return True
+    if until:
+        _brk[_prov(t)] = (fails, 0)  # expired -> half-open probe allowed
+    return False
+
+
+def note_provider_fail(t):
+    p = _prov(t)
+    fails, _ = _brk.get(p, (0, 0))
+    fails += 1
+    _brk[p] = (fails, time.time() + BRK_RESET if fails >= BRK_THRESHOLD else 0)
+
+
+def note_provider_ok(t):
+    _brk.pop(_prov(t), None)
+
+
+def lock_model(name, model, secs=60):
+    _mlock[(name, model)] = time.time() + secs
+
+
+def model_locked(name, model):
+    until = _mlock.get((name, model), 0)
+    if until > time.time():
+        return True
+    _mlock.pop((name, model), None)
+    return False
+
+
 def pick(targets, model):
-    """first non-cooled target serving model, else first non-cooled, else None."""
-    fresh = [t for t in targets if not is_cool(t.get("name", ""))]
-    for t in fresh:
-        if model in t.get("models", []):
-            return t
-    return fresh[0] if fresh else None
+    lst = chain(targets, model)
+    return lst[0] if lst else None
 
 
 def chain(targets, model):
-    """ordered fallback list: model-match first, then rest, skipping cooled."""
-    first = pick(targets, model)
-    rest = [t for t in targets if t is not first and not is_cool(t.get("name", ""))]
-    return ([first] if first else []) + rest
+    """model-match first (config order kept), skipping cooled keys, locked models, open breakers."""
+    out = [t for t in targets
+           if not is_cool(t.get("name", "")) and not breaker_open(t)
+           and not model_locked(t.get("name", ""), model)]
+    out.sort(key=lambda t: model not in t.get("models", []))
+    return out

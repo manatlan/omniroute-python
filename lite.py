@@ -69,8 +69,10 @@ class Handler(BaseHTTPRequestHandler):
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
                 code, hdrs, body = providers.call_target(t, payload)
-                if code < 500 and code != 429:
-                    router.note_success(t.get("name", ""))
+                name = t.get("name", "")
+                if code not in router.FAILOVER:
+                    router.note_success(name)
+                    router.note_provider_ok(t)
                     import json as _jj
                     if payload.get("stream"):
                         # ponytail: synthesized SSE from full text, true passthrough when latency proves needed
@@ -92,8 +94,16 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     return self.wfile.write(body)
-                if code in (408, 429, 500, 502, 503, 504):
-                    router.cool(t.get("name", ""), 5, router.parse_retry_after(hdrs))
+                if code in (408, 500, 502, 503, 504):
+                    router.note_provider_fail(t)
+                    router.cool(name, 5, router.parse_retry_after(hdrs))
+                elif code == 429:
+                    router.lock_model(name, model, 60)
+                    router.cool(name, 5, router.parse_retry_after(hdrs))
+                elif code == 404:
+                    router.lock_model(name, model, 600)
+                else:  # 401/403: key itself is bad, park it
+                    router.cool(name, 300)
                 last = (code, body)
             code, body = last
             self.send_response(code)
@@ -115,11 +125,21 @@ class Handler(BaseHTTPRequestHandler):
             start = _t.time()
             code, hdrs, body = providers.call_target(t, probe)
             ms = int((_t.time() - start) * 1000)
-            ok = code < 500 and code != 429
+            ok = code not in router.FAILOVER
+            name = t.get("name", "")
             if ok:
-                router.note_success(t.get("name", ""))
-            elif code in (408, 429, 500, 502, 503, 504):
-                router.cool(t.get("name", ""), 5, router.parse_retry_after(hdrs))
+                router.note_success(name)
+                router.note_provider_ok(t)
+            elif code in (408, 500, 502, 503, 504):
+                router.note_provider_fail(t)
+                router.cool(name, 5, router.parse_retry_after(hdrs))
+            elif code == 429:
+                router.lock_model(name, probe["model"], 60)
+                router.cool(name, 5, router.parse_retry_after(hdrs))
+            elif code == 404:
+                router.lock_model(name, probe["model"], 600)
+            else:
+                router.cool(name, 300)
             return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})
 
