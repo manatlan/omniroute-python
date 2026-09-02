@@ -9,6 +9,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 VERSION = "0.1.0"
 
 
+def _classify(t, model, code, hdrs):
+    """shared failover bookkeeping. Served responses call note_success at the call site."""
+    name = t.get("name", "")
+    if code in (408, 500, 502, 503, 504):
+        router.note_provider_fail(t)
+        router.cool(name, 5, router.parse_retry_after(hdrs))
+    elif code == 429:
+        router.lock_model(name, model, 60)
+        router.cool(name, 5, router.parse_retry_after(hdrs))
+    elif code == 404:
+        router.lock_model(name, model, 600)
+    else:  # 401/403: key itself is bad, park it
+        router.cool(name, 300)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "omniroute-lite/" + VERSION
 
@@ -111,16 +126,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     return self.wfile.write(body)
-                if code in (408, 500, 502, 503, 504):
-                    router.note_provider_fail(t)
-                    router.cool(name, 5, router.parse_retry_after(hdrs))
-                elif code == 429:
-                    router.lock_model(name, model, 60)
-                    router.cool(name, 5, router.parse_retry_after(hdrs))
-                elif code == 404:
-                    router.lock_model(name, model, 600)
-                else:  # 401/403: key itself is bad, park it
-                    router.cool(name, 300)
+                _classify(t, model, code, hdrs)
                 last = (code, body)
             code, body = last
             self.send_response(code)
@@ -147,16 +153,8 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 router.note_success(name)
                 router.note_provider_ok(t)
-            elif code in (408, 500, 502, 503, 504):
-                router.note_provider_fail(t)
-                router.cool(name, 5, router.parse_retry_after(hdrs))
-            elif code == 429:
-                router.lock_model(name, probe["model"], 60)
-                router.cool(name, 5, router.parse_retry_after(hdrs))
-            elif code == 404:
-                router.lock_model(name, probe["model"], 600)
-            else:
-                router.cool(name, 300)
+            elif code in router.FAILOVER:
+                _classify(t, probe["model"], code, hdrs)
             return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})
 
