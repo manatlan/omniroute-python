@@ -101,3 +101,18 @@ def chain(targets, model):
            and not model_locked(t.get("name", ""), model)]
     out.sort(key=lambda t: model not in t.get("models", []))
     return out
+
+
+def classify(t, model, code, headers):
+    """shared failover bookkeeping for one failed attempt."""
+    name = t.get("name", "")
+    if code in (408, 500, 502, 503, 504):
+        note_provider_fail(t)
+        cool(name, 5, parse_retry_after(headers))
+    elif code == 429:
+        lock_model(name, model, 60)
+        cool(name, 5, parse_retry_after(headers))
+    elif code == 404:
+        lock_model(name, model, 600)
+    else:  # 401/403: key itself is bad, park it
+        cool(name, 300)

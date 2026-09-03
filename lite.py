@@ -4,6 +4,7 @@ import router
 import providers
 import compress
 import stats
+import admin
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -11,18 +12,7 @@ VERSION = "0.1.0"
 
 
 def _classify(t, model, code, hdrs):
-    """shared failover bookkeeping. Served responses call note_success at the call site."""
-    name = t.get("name", "")
-    if code in (408, 500, 502, 503, 504):
-        router.note_provider_fail(t)
-        router.cool(name, 5, router.parse_retry_after(hdrs))
-    elif code == 429:
-        router.lock_model(name, model, 60)
-        router.cool(name, 5, router.parse_retry_after(hdrs))
-    elif code == 404:
-        router.lock_model(name, model, 600)
-    else:  # 401/403: key itself is bad, park it
-        router.cool(name, 300)
+    router.classify(t, model, code, hdrs)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,6 +47,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(401, {"error": {"message": "unauthorized"}})
 
     def do_GET(self):
+        if admin.handle(self, "GET"):
+            return
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION})
         if self.path == "/v1/stats":
@@ -74,6 +66,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         import time as _tt
+        if admin.handle(self, "POST"):
+            return
         if not self._authed():
             return self._deny()
         if self.path == "/v1/chat/completions":
@@ -212,6 +206,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass  # ponytail: no logging infra until needed
+
+
+    def do_PUT(self):
+        if admin.handle(self, "PUT"):
+            return
+        return self._send(404, {"error": {"message": "not found"}})
+
+    def do_DELETE(self):
+        if admin.handle(self, "DELETE"):
+            return
+        return self._send(404, {"error": {"message": "not found"}})
 
 
 def run(port=20128):

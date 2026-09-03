@@ -103,3 +103,37 @@ def save_server_key(key=None):
         pass
     _key_cache.update(mtime=os.path.getmtime(p), key=key)
     return key
+
+
+def validate_target(t):
+    if not isinstance(t, dict):
+        return "target must be an object"
+    if not t.get("name") or not t.get("base_url"):
+        return "name and base_url required"
+    if t.get("kind", "openai") not in ("openai", "ollama", "anthropic", "gemini", "azure"):
+        return "unknown kind"
+    if not isinstance(t.get("models", []), list):
+        return "models must be a list"
+    return None
+
+
+def save_targets(path, targets):
+    """write keys.toml from target dicts (known schema only)."""
+    def q(s):
+        return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    lines = ["# managed by omniroute-lite dashboard"]
+    for t in targets:
+        lines.append("\n[[targets]]")
+        lines.append(f"name = {q(t.get('name', ''))}")
+        if t.get("kind", "openai") != "openai":
+            lines.append(f"kind = {q(t['kind'])}")
+        if t.get("provider"):
+            lines.append(f"provider = {q(t['provider'])}")
+        lines.append(f"base_url = {q(t.get('base_url', ''))}")
+        lines.append(f"api_key = {q(t.get('api_key', ''))}")
+        if t.get("api_version"):
+            lines.append(f"api_version = {q(t['api_version'])}")
+        lines.append(f"models = [{', '.join(q(m) for m in t.get('models', []))}]")
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    _cache["mtime"] = 0  # force reload on next read
