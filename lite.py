@@ -134,6 +134,33 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             return self.wfile.write(body)
+        if self.path == "/v1/embeddings":
+            payload, err = self._body()
+            if err:
+                return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
+            model = payload.get("model", "")
+            targets = [t for t in router.chain(store.load_targets(), model) if t.get("kind", "openai") != "anthropic"]
+            if not targets:
+                return self._send(400, {"error": {"message": "no embedding-capable target"}})
+            last = (502, b'{"error":{"message":"all targets failed"}}')
+            for t in targets:
+                code, hdrs, body = providers.embed_target(t, payload)
+                if code not in router.FAILOVER:
+                    router.note_success(t.get("name", ""))
+                    router.note_provider_ok(t)
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
+                _classify(t, model, code, hdrs)
+                last = (code, body)
+            code, body = last
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if self.path == "/v1/test/call":
             import json as _j, time as _t
             payload, err = self._body()

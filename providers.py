@@ -177,3 +177,28 @@ def stream_target(t, payload, timeout=30):
     return post_stream(t["base_url"].rstrip("/") + "/v1/chat/completions",
         {"Content-Type": "application/json", **({"Authorization": f"Bearer {t['api_key']}"} if t.get("api_key") and t.get("api_key") != "-" else {})},
         json.dumps({**payload, "stream": True}).encode(), timeout)
+
+
+def embed_target(t, payload, timeout=30):
+    """embeddings -> (status, headers, body). gemini: str input only."""
+    kind = t.get("kind", "openai")
+    if kind == "azure":
+        ver = t.get("api_version", "2024-06-01")
+        return post(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/embeddings?api-version=" + ver,
+            {"Content-Type": "application/json", "api-key": t["api_key"]},
+            json.dumps(payload).encode(), timeout)
+    if kind == "gemini":
+        text = payload.get("input", "")
+        if not isinstance(text, str):
+            return 400, {}, b'{"error":{"message":"gemini kind takes str input; use openai-kind target for lists"}}'
+        code, h, body = post(t["base_url"].rstrip("/") + "/v1beta/models/" + payload.get("model", "") + ":embedContent",
+            {"Content-Type": "application/json", "x-goog-api-key": t["api_key"]},
+            json.dumps({"content": {"parts": [{"text": text}]}}).encode(), timeout)
+        if code == 200:
+            try:
+                vec = json.loads(body)["embedding"]["values"]
+            except (KeyError, ValueError):
+                vec = []
+            body = json.dumps({"data": [{"embedding": vec, "index": 0}], "model": payload.get("model", "")}).encode()
+        return code, h, body
+    return forward(t["base_url"], t.get("api_key", "-"), "/v1/embeddings", payload, timeout)
