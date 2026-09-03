@@ -59,3 +59,15 @@ class T(unittest.TestCase):
         self.assertEqual(code, 400)
         code, _ = self.req("PUT", "/admin/targets/nope", {"target": {"name": "n", "base_url": "b"}})
         self.assertEqual(code, 404)
+
+
+class TPresets(unittest.TestCase):
+    def test_shape_and_free_flags(self):
+        import presets
+        for p in presets.PRESETS:
+            self.assertTrue(p["base_url"].startswith(("https://", "http://localhost")))
+            self.assertIsInstance(p["free"], bool)
+            for m in p["models"]:
+                self.assertIn("id", m)
+                self.assertIsInstance(m.get("free", False), bool)
+        self.assertGreaterEqual(sum(1 for p in presets.PRESETS if p["free"]), 3)

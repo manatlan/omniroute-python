@@ -1,6 +1,7 @@
 """dashboard backend: targets CRUD + probes. Delegated from lite.Handler."""
 import urllib.parse
 
+import presets
 import providers
 import router
 import store
@@ -77,6 +78,9 @@ def handle(h, method):
         h._deny()
         return True
     parts = h.path[len("/admin/"):].split("/")
+    if parts[0] == "presets" and method == "GET" and len(parts) == 1:
+        h._send(200, {"presets": presets.PRESETS})
+        return True
     if parts[0] == "targets":
         if method in ("GET", "POST", "PUT", "DELETE"):
             body, err = (h._body() if method in ("POST", "PUT") else ({}, None))
