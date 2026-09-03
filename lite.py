@@ -50,8 +50,7 @@ class Handler(BaseHTTPRequestHandler):
             return None, "bad"
 
     def _authed(self):
-        import os as _o
-        key = _o.environ.get("LITE_KEY")
+        key = store.load_server_key()
         return not key or self.headers.get("Authorization") == f"Bearer {key}"
 
     def _deny(self):

@@ -60,3 +60,46 @@ def cache_set(path, key, body, ttl=300):
         con.commit(); con.close()
     except Exception:
         pass  # ponytail: cache never breaks requests
+
+
+_key_cache = {"mtime": 0, "key": None}
+
+
+def data_path(name):
+    import os
+    d = os.path.join(os.path.expanduser("~"), ".omniroute-lite")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, name)
+
+
+def load_server_key():
+    """env LITE_KEY wins; else key file; else None (open mode)."""
+    import os
+    env = os.environ.get("LITE_KEY")
+    if env:
+        return env
+    p = os.path.join(os.path.expanduser("~"), ".omniroute-lite", "server.key")
+    try:
+        mtime = os.path.getmtime(p)
+    except OSError:
+        return None
+    if mtime != _key_cache["mtime"]:
+        with open(p) as f:
+            key = f.read().strip()
+        _key_cache.update(mtime=mtime, key=key or None)
+    return _key_cache["key"]
+
+
+def save_server_key(key=None):
+    import os
+    import secrets
+    key = key or secrets.token_urlsafe(24)
+    p = data_path("server.key")
+    with open(p, "w") as f:
+        f.write(key + "\n")
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+    _key_cache.update(mtime=os.path.getmtime(p), key=key)
+    return key

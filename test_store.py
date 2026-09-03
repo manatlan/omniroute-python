@@ -24,3 +24,32 @@ class TCache(unittest.TestCase):
         self.assertEqual(cache_get(p, "k"), b"v")
         cache_set(p, "k", b"v", ttl=-1)
         self.assertIsNone(cache_get(p, "k"))
+
+
+class TKey(unittest.TestCase):
+    def test_env_wins_and_file_fallback(self):
+        import os
+        from store import load_server_key, save_server_key, _key_cache
+        home = os.path.expanduser("~")
+        o_exp, o_env = os.path.expanduser, os.environ.get("LITE_KEY")
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        os.path.expanduser = lambda p: tmp if p == "~" else o_exp(p)
+        os.environ.pop("LITE_KEY", None)
+        _key_cache.update(mtime=0, key=None)
+        try:
+            self.assertIsNone(load_server_key())
+            k = save_server_key("abc123")
+            self.assertEqual(k, "abc123")
+            self.assertEqual(load_server_key(), "abc123")
+            os.environ["LITE_KEY"] = "env-key"
+            self.assertEqual(load_server_key(), "env-key")
+            mode = oct(os.stat(os.path.join(tmp, ".omniroute-lite", "server.key")).st_mode & 0o777)
+            self.assertEqual(mode, "0o600")
+        finally:
+            os.path.expanduser = o_exp
+            _key_cache.update(mtime=0, key=None)
+            if o_env is not None:
+                os.environ["LITE_KEY"] = o_env
+            else:
+                os.environ.pop("LITE_KEY", None)
