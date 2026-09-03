@@ -1,6 +1,32 @@
-# add an API: append 5 lines, no restart (hot-reload on mtime)
+# Add an API: append a block, no restart (hot-reload on mtime).
+# kind: openai (default, covers Groq/Together/DeepSeek/xAI/Mistral/OpenRouter/...)
+#       | ollama (no key needed) | anthropic | gemini | azure
+# provider: optional group for the circuit breaker (defaults to name).
+#           targets sharing a provider trip one shared breaker.
+
 # [[targets]]
 # name = "groq"
 # base_url = "https://api.groq.com/openai/v1"
 # api_key = "gsk-..."
 # models = ["llama-3.3-70b-versatile"]
+
+# [[targets]]
+# name = "ollama-local"
+# kind = "ollama"
+# base_url = "http://localhost:11434/v1"
+# api_key = "-"
+# models = ["llama3.1"]
+
+# [[targets]]
+# name = "anthropic"
+# kind = "anthropic"
+# base_url = "https://api.anthropic.com"
+# api_key = "sk-ant-..."
+# models = ["claude-sonnet-4-5"]
+
+# [[targets]]
+# name = "azure-gpt"
+# kind = "azure"
+# base_url = "https://YOURS.openai.azure.com"
+# api_key = "..."
+# models = ["gpt-4o"]  # = Azure deployment name
