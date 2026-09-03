@@ -3,6 +3,7 @@ import store
 import router
 import providers
 import compress
+import stats
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -48,10 +49,24 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return None, "bad"
 
+    def _authed(self):
+        import os as _o
+        key = _o.environ.get("LITE_KEY")
+        return not key or self.headers.get("Authorization") == f"Bearer {key}"
+
+    def _deny(self):
+        return self._send(401, {"error": {"message": "unauthorized"}})
+
     def do_GET(self):
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION})
+        if self.path == "/v1/stats":
+            if not self._authed():
+                return self._deny()
+            return self._send(200, stats.snap())
         if self.path == "/v1/models":
+            if not self._authed():
+                return self._deny()
             return self._send(200, {"object": "list", "data": store.model_list(store.load_targets())})
         if self.path == "/":
             html = "<pre>omniroute-lite ok\nGET /health\nGET /v1/models</pre>"
@@ -59,7 +74,11 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
+        import time as _tt
+        if not self._authed():
+            return self._deny()
         if self.path == "/v1/chat/completions":
+            _t0 = _tt.time()
             import json as _j
             payload, err = self._body()
             if err:
@@ -89,6 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                     if scode == 200:
                         router.note_success(name)
                         router.note_provider_ok(t)
+                        stats.note(name, True, int((_tt.time() - _t0) * 1000))
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
                         self.send_header("Cache-Control", "no-cache")
@@ -105,6 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                 if code not in router.FAILOVER:
                     router.note_success(name)
                     router.note_provider_ok(t)
+                    stats.note(name, code < 400, int((_tt.time() - _t0) * 1000))
                     import json as _jj
                     if payload.get("stream"):
                         # ponytail: synthesized SSE from full text, true passthrough when latency proves needed
@@ -129,12 +150,14 @@ class Handler(BaseHTTPRequestHandler):
                 _classify(t, model, code, hdrs)
                 last = (code, body)
             code, body = last
+            stats.note(None, False, int((_tt.time() - _t0) * 1000))
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             return self.wfile.write(body)
         if self.path == "/v1/embeddings":
+            _t0 = _tt.time()
             payload, err = self._body()
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
@@ -148,6 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                 if code not in router.FAILOVER:
                     router.note_success(t.get("name", ""))
                     router.note_provider_ok(t)
+                    stats.note(t.get("name", ""), code < 400, int((_tt.time() - _t0) * 1000))
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
@@ -156,6 +180,7 @@ class Handler(BaseHTTPRequestHandler):
                 _classify(t, model, code, hdrs)
                 last = (code, body)
             code, body = last
+            stats.note(None, False, int((_tt.time() - _t0) * 1000))
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -182,6 +207,7 @@ class Handler(BaseHTTPRequestHandler):
                 router.note_provider_ok(t)
             elif code in router.FAILOVER:
                 _classify(t, probe["model"], code, hdrs)
+            stats.note(t.get("name", ""), ok, ms)
             return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})
 
