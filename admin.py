@@ -4,6 +4,7 @@ import urllib.parse
 import presets
 import providers
 import router
+import stats
 import store
 
 TARGETS_PATH = "keys.toml"
@@ -78,6 +79,15 @@ def handle(h, method):
         h._deny()
         return True
     parts = h.path[len("/admin/"):].split("/")
+    if parts[0] == "quota" and len(parts) == 1:
+        if method == "GET":
+            h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
+            return True
+        if method == "POST" and (h._body()[0] or {}).get("reset"):
+            stats.reset()
+            router._reset()
+            h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
+            return True
     if parts[0] == "presets" and method == "GET" and len(parts) == 1:
         h._send(200, {"presets": presets.PRESETS})
         return True

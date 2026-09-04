@@ -116,3 +116,13 @@ def classify(t, model, code, headers):
         lock_model(name, model, 600)
     else:  # 401/403: key itself is bad, park it
         cool(name, 300)
+
+
+def snapshot():
+    """cooldowns/breakers/locks with seconds remaining. Powers the Quota tab."""
+    now = time.time()
+    return {
+        "cooldowns": {k: int(v - now) for k, v in _cool_until.items() if v > now},
+        "breakers": {p: {"fails": f, "open_s": int(u - now) if u > now else 0} for p, (f, u) in _brk.items()},
+        "model_locks": {f"{n} / {m}": int(u - now) for (n, m), u in _mlock.items() if u > now},
+    }

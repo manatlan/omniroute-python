@@ -9,7 +9,7 @@ class T(unittest.TestCase):
         stats.note("a", False, 300)
         s = stats.snap()
         self.assertEqual((s["req"], s["ok"], s["err"], s["avg_ms"]), (2, 1, 1, 200))
-        self.assertEqual(s["by_target"]["a"], {"ok": 1, "err": 1})
+        self.assertEqual(s["by_target"]["a"], {"ok": 1, "err": 1, "avg_ms": 200})
 
 
 if __name__ == "__main__":
