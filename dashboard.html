@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>omniroute-lite</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; color: #000; background: #fff;
+         max-width: 720px; margin: 0 auto; padding: 16px; font-size: 17px; }
+  header { display: flex; align-items: center; gap: 10px; border-bottom: 3px solid #000;
+           padding-bottom: 10px; margin-bottom: 12px; }
+  header b { font-size: 22px; }
+  .dot { font-size: 20px; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  nav button { flex: 1 1 auto; }
+  button, input, select { font-size: 17px; padding: 12px; border: 2px solid #000;
+                          background: #fff; color: #000; border-radius: 8px; min-height: 48px; }
+  button { cursor: pointer; font-weight: 700; }
+  button.primary { background: #000; color: #fff; }
+  button:disabled { opacity: .4; }
+  input, select { width: 100%; margin: 4px 0 8px; }
+  label { font-weight: 700; }
+  .card { border: 2px solid #000; border-radius: 10px; padding: 12px; margin: 10px 0; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .grow { flex: 1; }
+  .tag { border: 2px solid #000; border-radius: 6px; padding: 1px 8px; font-size: 14px; font-weight: 700; }
+  .tag.inv { background: #000; color: #fff; }
+  .big3 { display: flex; gap: 10px; }
+  .big3 div { flex: 1; border: 2px solid #000; border-radius: 10px; padding: 10px; text-align: center; }
+  .big3 b { font-size: 34px; display: block; }
+  .keybox { font-size: 20px; font-weight: 700; word-break: break-all; border: 3px solid #000;
+            border-radius: 10px; padding: 14px; margin: 10px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { border-bottom: 1px solid #000; padding: 8px 4px; text-align: left; }
+  section { display: none; }
+  section.on { display: block; }
+  .muted { opacity: .65; }
+</style>
+<header><span class="dot" id="dot">●</span><b>omniroute</b></header>
+<nav id="tabs"></nav>
+
+<section id="s-home">
+  <div class="big3">
+    <div><b id="h-apis">–</b>APIs</div>
+    <div><b id="h-req">–</b>calls</div>
+    <div><b id="h-ms">–</b>avg ms</div>
+  </div>
+  <div class="card grow" id="h-verdict">…</div>
+</section>
+
+<section id="s-apis">
+  <div id="api-list"></div>
+  <h3>Add API</h3>
+  <label>Start from</label><select id="f-preset"></select>
+  <label>Name</label><input id="f-name" placeholder="groq">
+  <label>Address</label><input id="f-base" placeholder="https://…">
+  <label>Key</label><input id="f-key" placeholder="paste key, or - for none">
+  <label>Models (comma apart)</label><input id="f-models" placeholder="llama-3.3-70b-versatile">
+  <button class="primary" id="f-add" style="width:100%">Add</button>
+</section>
+
+<section id="s-prov">
+  <label class="row"><input type="checkbox" id="free-only" style="width:auto;min-height:0"> <span>Free only</span></label>
+  <div id="prov-list"></div>
+</section>
+
+<section id="s-quota">
+  <table><thead><tr><th>API</th><th>ok</th><th>bad</th><th>ms</th><th>state</th></tr></thead>
+  <tbody id="q-rows"></tbody></table>
+  <div style="margin-top:10px"><button id="q-reset">Reset counts</button></div>
+</section>
+
+<section id="s-key">
+  <div class="card">Paste these two into opencode:</div>
+  <div class="keybox" id="k-url">http://localhost:20128/v1</div>
+  <div class="keybox" id="k-key">…</div>
+  <div class="row"><button class="primary grow" id="k-copy">Copy key</button><button id="k-new">New key</button></div>
+</section>
+
+<section id="s-web">
+  <div id="w-list"></div>
+  <h3>Add</h3>
+  <label>Address</label><input id="w-url" placeholder="https://…">
+  <label class="row"><input type="checkbox" id="w-e1" checked style="width:auto;min-height:0"> <span>API down</span></label>
+  <label class="row"><input type="checkbox" id="w-e2" checked style="width:auto;min-height:0"> <span>All failed</span></label>
+  <button class="primary" id="w-add" style="width:100%">Add</button>
+</section>
+
+<section id="s-restart">
+  <div class="card">Running for <b id="r-up">…</b>.</div>
+  <button class="primary" id="r-btn" style="width:100%">Restart</button>
+</section>
+
+<script>
+let K = localStorage.getItem('k') || '';
+let PRESETS = [];
+async function api(method, path, body) {
+  const r = await fetch(path, {method, headers: {'Content-Type': 'application/json',
+    ...(K ? {Authorization: 'Bearer ' + K} : {})},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  if (r.status === 401) {
+    const k = prompt('Server key:');
+    if (k === null) throw new Error('no key');
+    K = k; localStorage.setItem('k', k);
+    return api(method, path, body);
+  }
+  return r.json();
+}
+const TABS = [['home','Home'],['apis','APIs'],['prov','Providers'],['quota','Quota'],
+              ['key','Key'],['web','Webhooks'],['restart','Restart']];
+const nav = document.getElementById('tabs');
+TABS.forEach(([id, name], i) => {
+  const b = document.createElement('button');
+  b.textContent = name; b.id = 'tab-' + id;
+  if (i === 0) b.className = 'primary';
+  b.onclick = () => show(id);
+  nav.appendChild(b);
+});
+function show(id) {
+  document.querySelectorAll('section').forEach(s => s.classList.remove('on'));
+  document.getElementById('s-' + id).classList.add('on');
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('primary'));
+  document.getElementById('tab-' + id).classList.add('primary');
+  ({home: loadHome, apis: loadApis, prov: loadProv, quota: loadQuota, key: loadKey,
+    web: loadWeb, restart: loadRestart})[id]();
+}
+const mask = k => k ? '••••' + String(k).slice(-4) : '—';
+async function loadHome() {
+  try {
+    const [st, q, t] = await Promise.all([
+      api('GET', '/admin/status'), api('GET', '/admin/quota'), api('GET', '/admin/targets')]);
+    document.getElementById('dot').textContent = '●';
+    document.getElementById('h-apis').textContent = t.targets.length;
+    document.getElementById('h-req').textContent = q.stats.req;
+    document.getElementById('h-ms').textContent = q.stats.avg_ms;
+    const cool = Object.keys(q.state.cooldowns).length;
+    const open = Object.values(q.state.breakers).filter(b => b.open_s > 0).length;
+    document.getElementById('h-verdict').textContent =
+      t.targets.length === 0 ? 'Add your first API ↑' :
+      open ? open + ' provider resting — the rest carry on' :
+      cool ? cool + ' key resting — the rest carry on' : 'All good';
+  } catch (e) { document.getElementById('dot').textContent = '○'; }
+}
+async function loadApis() {
+  const {targets} = await api('GET', '/admin/targets');
+  const q = await api('GET', '/admin/quota');
+  const box = document.getElementById('api-list');
+  box.innerHTML = targets.length ? '' : '<div class="card">Nothing here yet. Add one below ↓</div>';
+  targets.forEach(t => {
+    const s = q.state.cooldowns[t.name] ? 'resting ' + q.state.cooldowns[t.name] + 's' : 'OK';
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<div class="row"><b class="grow">${t.name}</b><span class="tag">${t.kind || 'openai'}</span>` +
+      `<span class="tag">${s}</span></div><div class="muted">${(t.models || []).join(', ')}</div>` +
+      `<div class="muted">key ${mask(t.api_key)}</div>`;
+    const r = document.createElement('div');
+    r.className = 'row'; r.style.marginTop = '8px';
+    const tb = document.createElement('button'); tb.textContent = 'Test';
+    tb.onclick = async () => { tb.disabled = true;
+      const res = await api('POST', '/admin/targets/' + encodeURIComponent(t.name) + '/test', {});
+      tb.textContent = res.ok ? 'Works ✓ (' + res.latency_ms + 'ms)' : 'Fails ✕ (' + res.status + ')';
+      setTimeout(loadApis, 1500); };
+    const del = document.createElement('button'); del.textContent = 'Remove';
+    del.onclick = async () => { if (confirm('Remove ' + t.name + '?')) {
+      await api('DELETE', '/admin/targets/' + encodeURIComponent(t.name)); loadApis(); } };
+    r.append(tb, del); d.append(r); box.append(d);
+  });
+  const sel = document.getElementById('f-preset');
+  if (!sel.options.length) {
+    PRESETS = (await api('GET', '/admin/presets')).presets;
+    sel.append(new Option('Blank', ''));
+    PRESETS.forEach((p, i) => sel.append(new Option(p.provider + (p.free ? ' — FREE' : ''), i)));
+    sel.onchange = () => { const p = PRESETS[sel.value]; if (!p) return;
+      document.getElementById('f-base').value = p.base_url;
+      document.getElementById('f-models').value = p.models.map(m => m.id).join(', ');
+      document.getElementById('f-name').value = p.provider.split(' ')[0].toLowerCase(); };
+  }
+}
+document.getElementById('f-add').onclick = async () => {
+  const t = {name: document.getElementById('f-name').value.trim(),
+    base_url: document.getElementById('f-base').value.trim(),
+    api_key: document.getElementById('f-key').value.trim() || '-',
+    models: document.getElementById('f-models').value.split(',').map(s => s.trim()).filter(Boolean)};
+  const p = PRESETS[document.getElementById('f-preset').value];
+  if (p && p.kind !== 'openai') t.kind = p.kind;
+  const res = await api('POST', '/admin/targets', {target: t});
+  if (res.error) { alert(res.error.message); return; }
+  document.querySelectorAll('#s-apis input').forEach(i => i.value = '');
+  loadApis();
+};
+async function loadProv() {
+  if (!PRESETS.length) PRESETS = (await api('GET', '/admin/presets')).presets;
+  const freeOnly = document.getElementById('free-only').checked;
+  const box = document.getElementById('prov-list');
+  box.innerHTML = '';
+  PRESETS.filter(p => !freeOnly || p.free).forEach(p => {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<div class="row"><b class="grow">${p.provider}</b>` +
+      (p.free ? '<span class="tag inv">FREE</span>' : '') + `</div>` +
+      `<div class="muted">${p.note}</div><div>${p.models.map(m =>
+        m.id + (m.free ? ' <span class="tag">FREE</span>' : '')).join('<br>')}</div>`;
+    const b = document.createElement('button'); b.textContent = 'Use';
+    b.style.marginTop = '8px';
+    b.onclick = () => { show('apis');
+      document.getElementById('f-preset').value = PRESETS.indexOf(p);
+      document.getElementById('f-preset').onchange(); };
+    d.append(b); box.append(d);
+  });
+}
+document.getElementById('free-only').onchange = loadProv;
+async function loadQuota() {
+  const q = await api('GET', '/admin/quota');
+  const tb = document.getElementById('q-rows');
+  tb.innerHTML = '';
+  Object.entries(q.stats.by_target).forEach(([n, v]) => {
+    const br = q.state.breakers[n];
+    const st = br && br.open_s > 0 ? 'resting' : (q.state.cooldowns[n] ? 'resting ' + q.state.cooldowns[n] + 's' : 'OK');
+    tb.insertAdjacentHTML('beforeend', `<tr><td>${n}</td><td>${v.ok}</td><td>${v.err}</td><td>${v.avg_ms}</td><td>${st}</td></tr>`);
+  });
+  if (!tb.children.length) tb.innerHTML = '<tr><td colspan="5">No calls yet.</td></tr>';
+}
+document.getElementById('q-reset').onclick = async () => {
+  await api('POST', '/admin/quota', {reset: true}); loadQuota();
+};
+async function loadKey() {
+  const {key, base_url} = await api('GET', '/admin/key');
+  if (key) { K = key; localStorage.setItem('k', key); }
+  document.getElementById('k-url').textContent = base_url;
+  document.getElementById('k-key').textContent = key || 'Open — press New key to lock it down';
+}
+document.getElementById('k-copy').onclick = async () => {
+  const t = document.getElementById('k-key').textContent;
+  try { await navigator.clipboard.writeText(t); } catch (e) {
+    const ta = document.createElement('textarea'); ta.value = t;
+    document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+};
+document.getElementById('k-new').onclick = async () => {
+  const {key} = await api('POST', '/admin/key/rotate', {});
+  K = key; localStorage.setItem('k', key); loadKey();
+};
+async function loadWeb() {
+  const {webhooks} = await api('GET', '/admin/webhooks');
+  const box = document.getElementById('w-list');
+  box.innerHTML = webhooks.length ? '' : '<div class="card">No webhooks. The server just works quietly.</div>';
+  webhooks.forEach(w => {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<div class="row"><b class="grow">${w.url}</b><button data-t="${w.id}">Try</button>` +
+      `<button data-d="${w.id}">Remove</button></div><div class="muted">${w.events.join(', ')}</div>`;
+    box.append(d);
+  });
+  box.querySelectorAll('[data-t]').forEach(b => b.onclick = () =>
+    api('POST', '/admin/webhooks/' + b.dataset.t + '/test', {}));
+  box.querySelectorAll('[data-d]').forEach(b => b.onclick = async () =>
+    { await api('DELETE', '/admin/webhooks/' + b.dataset.d); loadWeb(); });
+}
+document.getElementById('w-add').onclick = async () => {
+  const ev = [];
+  if (document.getElementById('w-e1').checked) ev.push('breaker_open');
+  if (document.getElementById('w-e2').checked) ev.push('all_failed');
+  const res = await api('POST', '/admin/webhooks',
+    {url: document.getElementById('w-url').value.trim(), events: ev});
+  if (res.error) { alert(res.error.message); return; }
+  document.getElementById('w-url').value = '';
+  loadWeb();
+};
+async function loadRestart() {
+  const st = await api('GET', '/admin/status');
+  const s = st.uptime_s;
+  document.getElementById('r-up').textContent =
+    Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm';
+}
+document.getElementById('r-btn').onclick = async () => {
+  if (!confirm('Restart the server?')) return;
+  document.getElementById('r-btn').textContent = 'Restarting…';
+  await api('POST', '/admin/restart', {});
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try { await fetch('/health'); break; } catch (e) {}
+  }
+  location.reload();
+};
+show('home');
+setInterval(() => { if (document.getElementById('s-home').classList.contains('on')) loadHome(); }, 5000);
+</script>

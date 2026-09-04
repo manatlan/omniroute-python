@@ -79,8 +79,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._deny()
             return self._send(200, {"object": "list", "data": store.model_list(store.load_targets())})
         if self.path == "/":
-            html = "<pre>omniroute-lite ok\nGET /health\nGET /v1/models</pre>"
-            return self._send(200, html, "text/html")
+            try:
+                with open("dashboard.html", "rb") as f:
+                    dash = f.read()
+            except OSError:
+                dash = b"<pre>omniroute-lite ok</pre>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(dash)))
+            self.end_headers()
+            return self.wfile.write(dash)
         return self._send(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
