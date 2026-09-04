@@ -113,3 +113,76 @@ class TQuota(unittest.TestCase):
         c.request("POST", "/admin/quota", json.dumps({"reset": True}), {"Content-Type": "application/json"})
         body = json.loads(c.getresponse().read())
         self.assertEqual(body["state"]["cooldowns"], {})
+
+
+class TKeyRestart(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self._o = os.path.expanduser
+        os.path.expanduser = lambda p: self.tmp if p == "~" else self._o(p)
+        self._old_key = os.environ.pop("LITE_KEY", None)
+        store._cache.update(mtime=0, targets=[])
+        store._key_cache.update(mtime=0, key=None)
+
+    def tearDown(self):
+        os.path.expanduser = self._o
+        if self._old_key is not None:
+            os.environ["LITE_KEY"] = self._old_key
+
+    def req(self, method, path, body=None, key=None):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        h = {"Content-Type": "application/json"}
+        if key:
+            h["Authorization"] = f"Bearer {key}"
+        c.request(method, path, json.dumps(body) if body is not None else None, h)
+        r = c.getresponse()
+        return r.status, json.loads(r.read())
+
+    def test_status_shape(self):
+        code, out = self.req("GET", "/admin/status")
+        self.assertEqual(code, 200)
+        self.assertEqual(out["key_mode"], "open")
+        self.assertIn("uptime_s", out)
+
+    def test_key_roundtrip(self):
+        code, out = self.req("GET", "/admin/key")
+        self.assertEqual((code, out["key"]), (200, None))
+        code, out = self.req("POST", "/admin/key/rotate", {})
+        self.assertEqual(code, 200)
+        key1 = out["key"]
+        self.assertTrue(len(key1) > 20)
+        code, _ = self.req("GET", "/admin/key")
+        self.assertEqual(code, 401)  # rotation locked the server
+        code, out = self.req("GET", "/admin/key", key=key1)
+        self.assertEqual(out["key"], key1)
+        code, out = self.req("POST", "/admin/key/rotate", {}, key=key1)
+        self.assertNotEqual(out["key"], key1)
+
+    def test_restart_responds_and_reexecs(self):
+        import os as _os
+        calls = []
+        real = _os.execv
+        _os.execv = lambda *a: calls.append(a)
+        try:
+            code, out = self.req("POST", "/admin/restart", {})
+            self.assertEqual((code, out), (200, {"ok": True}))
+            for _ in range(100):
+                if calls:
+                    break
+                import time as _t
+                _t.sleep(0.05)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(calls[0][1][1].endswith("lite.py"))
+        finally:
+            _os.execv = real

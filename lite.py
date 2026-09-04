@@ -11,6 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERSION = "0.1.0"
 
+import time as _time
+
+START = _time.time()
+
 
 def _classify(t, model, code, hdrs):
     return router.classify(t, model, code, hdrs)
@@ -58,6 +62,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/health":
             return self._send(200, {"ok": True, "version": VERSION})
+        if self.path == "/admin/status":
+            if not self._authed():
+                return self._deny()
+            import os as _o
+            key = store.load_server_key()
+            return self._send(200, {"version": VERSION, "uptime_s": int(_time.time() - START),
+                "targets": len(store.load_targets()),
+                "key_mode": "env" if _o.environ.get("LITE_KEY") else ("file" if key else "open")})
         if self.path == "/v1/stats":
             if not self._authed():
                 return self._deny()

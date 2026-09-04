@@ -89,6 +89,20 @@ def handle(h, method):
             router._reset()
             h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
             return True
+    if parts[0] == "key" and len(parts) == 1 and method == "GET":
+        h._send(200, {"key": store.load_server_key(), "base_url": "http://localhost:20128/v1"})
+        return True
+    if parts[0] == "key" and parts[1:] == ["rotate"] and method == "POST":
+        h._send(200, {"key": store.save_server_key(), "base_url": "http://localhost:20128/v1"})
+        return True
+    if parts[0] == "restart" and len(parts) == 1 and method == "POST":
+        import os as _o
+        import sys as _s
+        import threading as _t
+        h._send(200, {"ok": True})
+        me = _o.path.abspath(_o.path.join(_o.path.dirname(__file__), "lite.py"))
+        _t.Timer(0.3, lambda: _o.execv(_s.executable, [_s.executable, me])).start()
+        return True
     if parts[0] == "webhooks":
         if method == "GET" and len(parts) == 1:
             h._send(200, {"webhooks": webhooks.list_hooks(), "events": list(webhooks.EVENTS)})
@@ -129,5 +143,4 @@ def handle(h, method):
             code, obj = targets_crud(method, parts[1:], body)
             h._send(code, obj)
             return True
-    h._send(404, {"error": {"message": "not found"}})
-    return True
+    return False
