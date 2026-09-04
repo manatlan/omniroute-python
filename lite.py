@@ -5,6 +5,7 @@ import providers
 import compress
 import stats
 import admin
+import webhooks
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -12,7 +13,13 @@ VERSION = "0.1.0"
 
 
 def _classify(t, model, code, hdrs):
-    router.classify(t, model, code, hdrs)
+    return router.classify(t, model, code, hdrs)
+
+
+def _fire_breaker(t, model, code, hdrs):
+    prov = _classify(t, model, code, hdrs)
+    if prov:
+        webhooks.dispatch("breaker_open", {"provider": prov})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -140,10 +147,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     return self.wfile.write(body)
-                _classify(t, model, code, hdrs)
+                _fire_breaker(t, model, code, hdrs)
                 last = (code, body)
             code, body = last
             stats.note(None, False, int((_tt.time() - _t0) * 1000))
+            webhooks.dispatch("all_failed", {"endpoint": "chat", "model": model})
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -170,10 +178,11 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     return self.wfile.write(body)
-                _classify(t, model, code, hdrs)
+                _fire_breaker(t, model, code, hdrs)
                 last = (code, body)
             code, body = last
             stats.note(None, False, int((_tt.time() - _t0) * 1000))
+            webhooks.dispatch("all_failed", {"endpoint": "embeddings", "model": model})
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -199,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
                 router.note_success(name)
                 router.note_provider_ok(t)
             elif code in router.FAILOVER:
-                _classify(t, probe["model"], code, hdrs)
+                _fire_breaker(t, probe["model"], code, hdrs)
             stats.note(t.get("name", ""), ok, ms)
             return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})

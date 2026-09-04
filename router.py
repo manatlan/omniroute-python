@@ -67,10 +67,13 @@ def breaker_open(t):
 
 
 def note_provider_fail(t):
+    """-> True when this failure newly opened the breaker."""
     p = _prov(t)
     fails, _ = _brk.get(p, (0, 0))
     fails += 1
+    opened = fails == BRK_THRESHOLD
     _brk[p] = (fails, time.time() + BRK_RESET if fails >= BRK_THRESHOLD else 0)
+    return opened
 
 
 def note_provider_ok(t):
@@ -104,11 +107,12 @@ def chain(targets, model):
 
 
 def classify(t, model, code, headers):
-    """shared failover bookkeeping for one failed attempt."""
+    """shared failover bookkeeping. -> provider name if breaker newly opened, else None."""
     name = t.get("name", "")
     if code in (408, 500, 502, 503, 504):
-        note_provider_fail(t)
+        opened = note_provider_fail(t)
         cool(name, 5, parse_retry_after(headers))
+        return _prov(t) if opened else None
     elif code == 429:
         lock_model(name, model, 60)
         cool(name, 5, parse_retry_after(headers))

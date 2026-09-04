@@ -6,6 +6,7 @@ import providers
 import router
 import stats
 import store
+import webhooks
 
 TARGETS_PATH = "keys.toml"
 
@@ -87,6 +88,34 @@ def handle(h, method):
             stats.reset()
             router._reset()
             h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
+            return True
+    if parts[0] == "webhooks":
+        if method == "GET" and len(parts) == 1:
+            h._send(200, {"webhooks": webhooks.list_hooks(), "events": list(webhooks.EVENTS)})
+            return True
+        if method == "POST" and len(parts) == 1:
+            body, err = h._body()
+            if err:
+                h._send(400, {"error": {"message": "bad json"}})
+                return True
+            hid, herr = webhooks.add_hook((body or {}).get("url"), (body or {}).get("events"))
+            if herr:
+                h._send(400, {"error": {"message": herr}})
+                return True
+            h._send(200, {"webhooks": webhooks.list_hooks()})
+            return True
+        if method == "DELETE" and len(parts) == 2:
+            import urllib.parse as _up
+            h._send(200, {"webhooks": webhooks.delete_hook(_up.unquote(parts[1]))})
+            return True
+        if method == "POST" and len(parts) == 3 and parts[2] == "test":
+            import urllib.parse as _up
+            hook = next((x for x in webhooks.list_hooks() if str(x.get("id")) == _up.unquote(parts[1])), None)
+            if not hook:
+                h._send(404, {"error": {"message": "unknown webhook"}})
+                return True
+            webhooks._fire(hook["url"], {"event": "test", "msg": "hello from omniroute-lite"})
+            h._send(200, {"ok": True})
             return True
     if parts[0] == "presets" and method == "GET" and len(parts) == 1:
         h._send(200, {"presets": presets.PRESETS})
