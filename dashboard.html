@@ -60,7 +60,17 @@
   <button class="primary" id="f-add" style="width:100%">Add</button>
 </section>
 
+<section id="s-chat">
+  <label>API</label><select id="c-target"></select>
+  <label>Model</label><select id="c-model"></select>
+  <div class="card" id="c-out" style="white-space:pre-wrap;min-height:120px">Say hi ↓</div>
+  <div class="row"><input id="c-in" class="grow" placeholder="ask anything" style="margin:0">
+  <button class="primary" id="c-send">Send</button></div>
+  <div style="margin-top:8px"><button id="c-clear">Clear</button></div>
+</section>
+
 <section id="s-prov">
+  <input id="prov-q" placeholder="find provider or model…">
   <label class="row"><input type="checkbox" id="free-only" style="width:auto;min-height:0"> <span>Free only</span></label>
   <div id="prov-list"></div>
 </section>
@@ -107,7 +117,7 @@ async function api(method, path, body) {
   }
   return r.json();
 }
-const TABS = [['home','Home'],['apis','APIs'],['prov','Providers'],['quota','Quota'],
+const TABS = [['home','Home'],['apis','APIs'],['prov','Providers'],['chat','Chat'],['quota','Quota'],
               ['key','Key'],['web','Webhooks'],['restart','Restart']];
 const nav = document.getElementById('tabs');
 TABS.forEach(([id, name], i) => {
@@ -122,7 +132,7 @@ function show(id) {
   document.getElementById('s-' + id).classList.add('on');
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('primary'));
   document.getElementById('tab-' + id).classList.add('primary');
-  ({home: loadHome, apis: loadApis, prov: loadProv, quota: loadQuota, key: loadKey,
+  ({home: loadHome, apis: loadApis, prov: loadProv, chat: loadChat, quota: loadQuota, key: loadKey,
     web: loadWeb, restart: loadRestart})[id]();
 }
 const mask = k => k ? '••••' + String(k).slice(-4) : '—';
@@ -152,7 +162,7 @@ async function loadApis() {
     const d = document.createElement('div');
     d.className = 'card';
     d.innerHTML = `<div class="row"><b class="grow">${t.name}</b><span class="tag">${t.kind || 'openai'}</span>` +
-      `<span class="tag">${s}</span></div><div class="muted">${(t.models || []).join(', ')}</div>` +
+      `<span class="tag">${s}</span></div><div>${(t.models || []).map(m => `<button data-m="${m}" style="min-height:0;padding:6px 10px;margin:2px">${m}</button>`).join('')}</div>` +
       `<div class="muted">key ${mask(t.api_key)}</div>`;
     const r = document.createElement('div');
     r.className = 'row'; r.style.marginTop = '8px';
@@ -165,6 +175,11 @@ async function loadApis() {
     del.onclick = async () => { if (confirm('Remove ' + t.name + '?')) {
       await api('DELETE', '/admin/targets/' + encodeURIComponent(t.name)); loadApis(); } };
     r.append(tb, del); d.append(r); box.append(d);
+    d.querySelectorAll('[data-m]').forEach(mb => mb.onclick = async () => {
+      mb.disabled = true;
+      const res = await api('POST', '/admin/targets/' + encodeURIComponent(t.name) + '/test', {model: mb.dataset.m});
+      mb.textContent = (res.ok ? '✓ ' : '✕ ') + mb.dataset.m;
+      setTimeout(loadApis, 2000); });
   });
   const sel = document.getElementById('f-preset');
   if (!sel.options.length) {
@@ -194,22 +209,106 @@ async function loadProv() {
   const freeOnly = document.getElementById('free-only').checked;
   const box = document.getElementById('prov-list');
   box.innerHTML = '';
-  PRESETS.filter(p => !freeOnly || p.free).forEach(p => {
+  const pq = document.getElementById('prov-q').value.toLowerCase();
+  PRESETS.filter(p => (!freeOnly || p.free) &&
+    (!pq || p.provider.toLowerCase().includes(pq) || p.models.some(m => m.id.toLowerCase().includes(pq)))).forEach(p => {
     const d = document.createElement('div');
     d.className = 'card';
     d.innerHTML = `<div class="row"><b class="grow">${p.provider}</b>` +
       (p.free ? '<span class="tag inv">FREE</span>' : '') + `</div>` +
       `<div class="muted">${p.note}</div><div>${p.models.map(m =>
-        m.id + (m.free ? ' <span class="tag">FREE</span>' : '')).join('<br>')}</div>`;
+        `<button data-pm="${m.id}" style="min-height:0;padding:6px 10px;margin:2px">${m.id}</button>` +
+        (m.free ? ' <span class="tag">FREE</span>' : '')).join('<br>')}</div>`;
     const b = document.createElement('button'); b.textContent = 'Use';
     b.style.marginTop = '8px';
     b.onclick = () => { show('apis');
       document.getElementById('f-preset').value = PRESETS.indexOf(p);
       document.getElementById('f-preset').onchange(); };
     d.append(b); box.append(d);
+    d.querySelectorAll('[data-pm]').forEach(mb => mb.onclick = () => chatWith(p, mb.dataset.pm));
   });
 }
 document.getElementById('free-only').onchange = loadProv;
+document.getElementById('prov-q').oninput = loadProv;
+async function chatWith(p, model) {
+  const {targets} = await api('GET', '/admin/targets');
+  const hit = targets.find(t => (t.models || []).includes(model));
+  if (hit) { show('chat'); setChat(hit.name, model); return; }
+  if (p.lite) { show('apis');
+    const sel = document.getElementById('f-preset');
+    sel.value = PRESETS.indexOf(p); sel.onchange();
+    document.getElementById('f-models').value = model;
+  } else { alert(p.provider + ': ' + p.note); }
+}
+let HIST = [];
+async function loadChat() {
+  const {targets} = await api('GET', '/admin/targets');
+  const ts = document.getElementById('c-target');
+  ts.innerHTML = '';
+  targets.forEach(t => ts.append(new Option(t.name, t.name)));
+  fillModels();
+}
+function fillModels() {
+  const t = document.getElementById('c-target').value;
+  api('GET', '/admin/targets').then(({targets}) => {
+    const hit = targets.find(x => x.name === t);
+    const ms = document.getElementById('c-model');
+    ms.innerHTML = '';
+    (hit ? hit.models : []).forEach(m => ms.append(new Option(m, m)));
+  });
+}
+function setChat(target, model) {
+  loadChat().then(() => {
+    document.getElementById('c-target').value = target;
+    fillModels();
+    setTimeout(() => { document.getElementById('c-model').value = model; }, 100);
+  });
+}
+document.getElementById('c-target').onchange = fillModels;
+document.getElementById('c-clear').onclick = () => {
+  HIST = []; document.getElementById('c-out').textContent = 'Say hi ↓'; };
+document.getElementById('c-send').onclick = async () => {
+  const inp = document.getElementById('c-in');
+  const text = inp.value.trim();
+  if (!text) return;
+  const model = document.getElementById('c-model').value;
+  HIST.push({role: 'user', content: text});
+  inp.value = '';
+  const box = document.getElementById('c-out');
+  box.textContent += '\n\nYOU: ' + text + '\nAI: ';
+  const r = await fetch('/v1/chat/completions', {method: 'POST',
+    headers: {'Content-Type': 'application/json', ...(K ? {Authorization: 'Bearer ' + K} : {})},
+    body: JSON.stringify({model, messages: HIST, stream: true})});
+  if (r.status === 401) {
+    const k = prompt('Server key:');
+    if (k === null) return;
+    K = k; localStorage.setItem('k', k);
+    HIST.pop();
+    document.getElementById('c-send').onclick();
+    return;
+  }
+  const rd = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', reply = '';
+  for (;;) {
+    const part = await rd.read();
+    if (part.done) break;
+    buf += dec.decode(part.value, {stream: true});
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const ev = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const line = ev.split('\n').find(l => l.startsWith('data:'));
+      if (!line) continue;
+      const d = line.slice(5).trim();
+      if (d === '[DONE]') continue;
+      try { const c = JSON.parse(d).choices[0].delta.content || ''; reply += c; box.textContent += c; }
+      catch (e) {}
+    }
+  }
+  HIST.push({role: 'assistant', content: reply});
+  box.scrollTop = box.scrollHeight;
+};
 async function loadQuota() {
   const q = await api('GET', '/admin/quota');
   const tb = document.getElementById('q-rows');

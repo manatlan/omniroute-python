@@ -14,6 +14,7 @@ ROUTES = {
     ("POST", "/admin/targets"), ("POST", "/admin/targets/*/test"), ("POST", "/admin/quota"),
     ("POST", "/admin/key/rotate"), ("POST", "/admin/webhooks"), ("POST", "/admin/webhooks/*/test"),
     ("POST", "/admin/restart"),
+    ("POST", "/v1/chat/completions"),
     ("DELETE", "/admin/targets/*"), ("DELETE", "/admin/webhooks/*"),
 }
 
@@ -99,7 +100,9 @@ class T(unittest.TestCase):
         self.assertIn("text/html", r.getheader("Content-Type"))
         for sec in ["s-home", "s-apis", "s-prov", "s-quota", "s-key", "s-web", "s-restart"]:
             self.assertIn('id="%s"' % sec, body)
-        for name in ["Home", "APIs", "Providers", "Quota", "Key", "Webhooks", "Restart"]:
+        for sec in ["s-chat"]:
+            self.assertIn('id="%s"' % sec, body)
+        for name in ["Home", "APIs", "Providers", "Chat", "Quota", "Key", "Webhooks", "Restart"]:
             self.assertIn("'%s'" % name, body)
         self.assertNotIn("<img", body)
 
@@ -116,9 +119,10 @@ class T(unittest.TestCase):
                 p += "*"  # dynamic tail, e.g. '/x/' + id
             calls.add((m.group(1), p))
         for e in js_calls(HTML, "fetch("):
-            e = e.strip()
-            if e.startswith("'"):
-                calls.add(("GET", e[1:-1]))
+            first = split_top(e)[0].strip()
+            if first.startswith("'"):
+                m = "POST" if "method: 'POST'" in e else "GET"
+                calls.add((m, first[1:-1]))
         for c in calls:
             self.assertIn(c, ROUTES, "JS calls unknown route %r" % (c,))
 
