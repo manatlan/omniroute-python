@@ -1,7 +1,7 @@
 """dashboard backend: targets CRUD + probes. Delegated from lite.Handler."""
 import urllib.parse
 
-import presets
+import catalog
 import providers
 import router
 import stats
@@ -132,7 +132,7 @@ def handle(h, method):
             h._send(200, {"ok": True})
             return True
     if parts[0] == "presets" and method == "GET" and len(parts) == 1:
-        h._send(200, {"presets": presets.PRESETS})
+        h._send(200, {"presets": catalog_presets(), "generated": catalog.GENERATED})
         return True
     if parts[0] == "targets":
         if method in ("GET", "POST", "PUT", "DELETE"):
@@ -144,3 +144,24 @@ def handle(h, method):
             h._send(code, obj)
             return True
     return False
+
+
+AUTH_NOTE = {
+    "cookie": "Needs a browser cookie — open the site, copy it, paste as the key.",
+    "oauth": "Needs app login — not routable here yet.",
+    "none": "No key needed.",
+}
+
+
+def catalog_presets():
+    out = []
+    for p in catalog.CATALOG:
+        note = AUTH_NOTE.get(p["auth"], "")
+        if not p["kind"] and not note:
+            note = "Special format — not routable here yet."
+        http = p["base"].startswith(("https://", "http://"))
+        out.append({"provider": p["id"], "kind": p["kind"] if http else None, "base_url": p["base"],
+                    "auth": p["auth"], "free": p["free"], "tos": p["tos"], "note": note,
+                    "lite": http and bool(p["kind"]) and p["auth"] in ("key", "x-api-key", "api-key", "cookie", "none"),
+                    "models": [{"id": m["id"], "name": m["name"], "free": m["free"]} for m in p["models"]]})
+    return out

@@ -61,16 +61,38 @@ class T(unittest.TestCase):
         self.assertEqual(code, 404)
 
 
-class TPresets(unittest.TestCase):
-    def test_shape_and_free_flags(self):
-        import presets
-        for p in presets.PRESETS:
-            self.assertTrue(p["base_url"].startswith(("https://", "http://localhost")))
-            self.assertIsInstance(p["free"], bool)
+class TCatalog(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_catalog_shape(self):
+        import catalog
+        self.assertGreater(len(catalog.CATALOG), 200)
+        kinds = {p["kind"] for p in catalog.CATALOG}
+        self.assertIn("openai", kinds)
+        for p in catalog.CATALOG:
+            self.assertTrue(p["base"] == "" or "://" in p["base"])
             for m in p["models"]:
                 self.assertIn("id", m)
-                self.assertIsInstance(m.get("free", False), bool)
-        self.assertGreaterEqual(sum(1 for p in presets.PRESETS if p["free"]), 3)
+
+    def test_presets_endpoint(self):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/admin/presets")
+        r = c.getresponse()
+        body = json.loads(r.read())
+        self.assertEqual(r.status, 200)
+        self.assertGreater(len(body["presets"]), 200)
+        self.assertIn("generated", body)
+        groq = next(p for p in body["presets"] if p["provider"] == "groq")
+        self.assertTrue(groq["lite"])
+        self.assertTrue(any(m["id"] == "llama-3.3-70b-versatile" for m in groq["models"]))
 
 
 class TQuota(unittest.TestCase):
