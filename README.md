@@ -38,5 +38,18 @@ systemctl --user enable --now omniroute-lite
 loginctl enable-linger $USER
 ```
 
+## Dashboard (http://localhost:20128)
+Black and white, no manual needed. Seven tabs:
+
+- **Home** — APIs, calls, avg ms, one-line verdict.
+- **APIs** — add (start from a preset), per-row Test + Remove. Keys shown masked.
+- **Providers** — preset cards with FREE tags, Free-only toggle, Use fills the Add form.
+- **Quota** — per-API ok/bad/avg-ms plus live state (OK / resting Ns), Reset counts.
+- **Key** — the two values opencode needs (URL + key). Copy, New key (auto-saved in browser).
+- **Webhooks** — POST JSON on `breaker_open` / `all_failed`, per-row Try + Remove.
+- **Restart** — one button, page reloads when back.
+
+First run is open; press New key once and the server + dashboard lock to it.
+
 ## Tests
 `python3 -m unittest` (41 tests, stdlib only).
