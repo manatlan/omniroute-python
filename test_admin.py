@@ -208,3 +208,22 @@ class TKeyRestart(unittest.TestCase):
             self.assertTrue(calls[0][1][1].endswith("lite.py"))
         finally:
             _os.execv = real
+
+
+class TModels(unittest.TestCase):
+    def test_map_shape(self):
+        import admin as _a
+        old = _a.TARGETS_PATH
+        import tempfile
+        _a.TARGETS_PATH = os.path.join(tempfile.mkdtemp(), "k.toml")
+        try:
+            store.save_targets(_a.TARGETS_PATH, [
+                {"name": "a", "base_url": "https://x/v1", "api_key": "k",
+                 "models": ["llama-3.3-70b-versatile", "mine"]}])
+            m = _a.configured_model_map()
+            by_id = {e["id"]: e for e in m}
+            self.assertEqual(by_id["mine"]["targets"], ["a"])
+            self.assertFalse(by_id["mine"]["free"])
+            self.assertIn("targets", by_id["llama-3.3-70b-versatile"])
+        finally:
+            _a.TARGETS_PATH = old

@@ -131,6 +131,9 @@ def handle(h, method):
             webhooks._fire(hook["url"], {"event": "test", "msg": "hello from omniroute-lite"})
             h._send(200, {"ok": True})
             return True
+    if parts[0] == "models" and method == "GET" and len(parts) == 1:
+        h._send(200, {"models": configured_model_map()})
+        return True
     if parts[0] == "presets" and method == "GET" and len(parts) == 1:
         h._send(200, {"presets": catalog_presets(), "generated": catalog.GENERATED})
         return True
@@ -165,3 +168,19 @@ def catalog_presets():
                     "lite": http and bool(p["kind"]) and p["auth"] in ("key", "x-api-key", "api-key", "cookie", "none"),
                     "models": [{"id": m["id"], "name": m["name"], "free": m["free"]} for m in p["models"]]})
     return out
+
+
+_free_idx = None
+
+
+def configured_model_map():
+    """configured models -> {id, free (per main catalog), targets [names]}."""
+    global _free_idx
+    if _free_idx is None:
+        _free_idx = {m["id"] for p in catalog.CATALOG for m in p["models"] if m["free"]}
+    out = {}
+    for t in _list():
+        for m in t.get("models", []):
+            e = out.setdefault(m, {"id": m, "free": m in _free_idx, "targets": []})
+            e["targets"].append(t.get("name", ""))
+    return sorted(out.values(), key=lambda e: e["id"])
