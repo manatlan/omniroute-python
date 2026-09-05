@@ -62,12 +62,24 @@ def post(url, headers, body, timeout=30, max_body=MAX_BODY):
         return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
 
 
-def forward(base_url, api_key, path, payload, timeout=30):
+def t_headers(t, base):
+    """user headers/cookies first, kind auth wins, Content-Type always ours."""
+    h = {}
+    for k, v in (t.get("headers") or {}).items():
+        if k.lower() != "content-length":
+            h[k] = str(v)
+    if t.get("cookies"):
+        prior = h.get("Cookie", "")
+        h["Cookie"] = (prior + "; " + t["cookies"]).strip("; ") if prior else t["cookies"]
+    h.update(base)
+    h["Content-Type"] = "application/json"
+    return h
+
+
+def forward(base_url, api_key, path, payload, timeout=30, extra=None):
     url = base_url.rstrip("/") + path
-    h = {"Content-Type": "application/json"}
-    if api_key and api_key != "-":
-        h["Authorization"] = f"Bearer {api_key}"
-    return post(url, h, json.dumps(payload).encode(), timeout)[:3]
+    auth = {"Authorization": f"Bearer {api_key}"} if api_key and api_key != "-" else {}
+    return post(url, t_headers(extra or {}, auth), json.dumps(payload).encode(), timeout)[:3]
 
 
 def to_anthropic(payload):
@@ -108,25 +120,25 @@ def call_target(t, payload, timeout=30):
     kind = t.get("kind", "openai")
     if kind == "anthropic":
         code, h, body = post(t["base_url"].rstrip("/") + "/v1/messages",
-            {"Content-Type": "application/json", "x-api-key": t["api_key"], "anthropic-version": "2023-06-01"},
+            t_headers(t, {"x-api-key": t["api_key"], "anthropic-version": "2023-06-01"}),
             json.dumps(to_anthropic(payload)).encode(), timeout)
         if code == 200:
             body = json.dumps(from_anthropic(body)).encode()
         return code, h, body
     if kind == "gemini":
         code, h, body = forward(t["base_url"], t["api_key"],
-            "/v1beta/models/" + payload.get("model", "") + ":generateContent", to_gemini(payload), timeout)
+            "/v1beta/models/" + payload.get("model", "") + ":generateContent", to_gemini(payload), timeout, extra=t)
         if code == 200:
             body = json.dumps(from_gemini(body)).encode()
         return code, h, body
     if kind == "azure":
         ver = t.get("api_version", "2024-06-01")
         code, h, body = post(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/chat/completions?api-version=" + ver,
-            {"Content-Type": "application/json", "api-key": t["api_key"]},
+            t_headers(t, {"api-key": t["api_key"]}),
             json.dumps(payload).encode(), timeout)
         return code, h, body
     # openai + ollama (ollama: api_key empty/"-" omits auth)
-    return forward(t["base_url"], t.get("api_key", "-"), "/v1/chat/completions", payload, timeout)
+    return forward(t["base_url"], t.get("api_key", "-"), "/v1/chat/completions", payload, timeout, extra=t)
 
 
 def post_stream(url, headers, body, timeout=30, chunk=65536):
@@ -172,10 +184,10 @@ def stream_target(t, payload, timeout=30):
     if kind == "azure":
         ver = t.get("api_version", "2024-06-01")
         return post_stream(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/chat/completions?api-version=" + ver,
-            {"Content-Type": "application/json", "api-key": t["api_key"]},
+            t_headers(t, {"api-key": t["api_key"]}),
             json.dumps({**payload, "stream": True}).encode(), timeout)
     return post_stream(t["base_url"].rstrip("/") + "/v1/chat/completions",
-        {"Content-Type": "application/json", **({"Authorization": f"Bearer {t['api_key']}"} if t.get("api_key") and t.get("api_key") != "-" else {})},
+        t_headers(t, dict({"Authorization": f"Bearer {t['api_key']}"} if t.get("api_key") and t.get("api_key") != "-" else {})),
         json.dumps({**payload, "stream": True}).encode(), timeout)
 
 
@@ -185,14 +197,14 @@ def embed_target(t, payload, timeout=30):
     if kind == "azure":
         ver = t.get("api_version", "2024-06-01")
         return post(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/embeddings?api-version=" + ver,
-            {"Content-Type": "application/json", "api-key": t["api_key"]},
+            t_headers(t, {"api-key": t["api_key"]}),
             json.dumps(payload).encode(), timeout)
     if kind == "gemini":
         text = payload.get("input", "")
         if not isinstance(text, str):
             return 400, {}, b'{"error":{"message":"gemini kind takes str input; use openai-kind target for lists"}}'
         code, h, body = post(t["base_url"].rstrip("/") + "/v1beta/models/" + payload.get("model", "") + ":embedContent",
-            {"Content-Type": "application/json", "x-goog-api-key": t["api_key"]},
+            t_headers(t, {"x-goog-api-key": t["api_key"]}),
             json.dumps({"content": {"parts": [{"text": text}]}}).encode(), timeout)
         if code == 200:
             try:
@@ -201,4 +213,4 @@ def embed_target(t, payload, timeout=30):
                 vec = []
             body = json.dumps({"data": [{"embedding": vec, "index": 0}], "model": payload.get("model", "")}).encode()
         return code, h, body
-    return forward(t["base_url"], t.get("api_key", "-"), "/v1/embeddings", payload, timeout)
+    return forward(t["base_url"], t.get("api_key", "-"), "/v1/embeddings", payload, timeout, extra=t)

@@ -114,6 +114,10 @@ def validate_target(t):
         return "unknown kind"
     if not isinstance(t.get("models", []), list):
         return "models must be a list"
+    if "headers" in t and not isinstance(t["headers"], dict):
+        return "headers must be an object"
+    if "cookies" in t and not isinstance(t["cookies"], str):
+        return "cookies must be a string"
     return None
 
 
@@ -131,6 +135,11 @@ def save_targets(path, targets):
             lines.append(f"provider = {q(t['provider'])}")
         lines.append(f"base_url = {q(t.get('base_url', ''))}")
         lines.append(f"api_key = {q(t.get('api_key', ''))}")
+        if t.get("cookies"):
+            lines.append(f"cookies = {q(t['cookies'])}")
+        if t.get("headers"):
+            inner = ", ".join(f"{q(k)} = {q(v)}" for k, v in t["headers"].items())
+            lines.append(f"headers = {{ {inner} }}")
         if t.get("api_version"):
             lines.append(f"api_version = {q(t['api_version'])}")
         lines.append(f"models = [{', '.join(q(m) for m in t.get('models', []))}]")

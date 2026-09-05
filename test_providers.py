@@ -81,3 +81,51 @@ class T3(unittest.TestCase):
         self.assertEqual(out["contents"][0]["parts"], [{"text": "hi"}])
         back = providers.from_gemini({"candidates": [{"content": {"parts": [{"text": "yo"}]}}]})
         self.assertEqual(back["choices"][0]["message"]["content"], "yo")
+
+
+class TCookies(unittest.TestCase):
+    def test_cookie_and_custom_header_sent(self):
+        seen = {}
+
+        class Recv(__import__("http.server", fromlist=["BaseHTTPRequestHandler"]).BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(n)
+                seen["cookie"] = self.headers.get("Cookie")
+                seen["x"] = self.headers.get("X-Custom")
+                seen["auth"] = self.headers.get("Authorization")
+                out = b"{}"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        from http.server import ThreadingHTTPServer
+        from threading import Thread
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Recv)
+        Thread(target=srv.serve_forever, daemon=True).start()
+        t = {"base_url": f"http://127.0.0.1:{srv.server_address[1]}/v1", "api_key": "k",
+             "cookies": "sess=abc", "headers": {"X-Custom": "yes"}}
+        code, _, _ = providers.call_target(t, {"model": "m", "messages": []})
+        srv.shutdown()
+        self.assertEqual(code, 200)
+        self.assertEqual(seen["cookie"], "sess=abc")
+        self.assertEqual(seen["x"], "yes")
+        self.assertEqual(seen["auth"], "Bearer k")
+
+    def test_toml_roundtrip(self):
+        import os, tempfile
+        from store import save_targets, load_targets
+        p = os.path.join(tempfile.mkdtemp(), "k.toml")
+        t = {"name": "w", "kind": "openai", "base_url": "https://x/v1", "api_key": "-",
+             "cookies": "a=b; c=d", "headers": {"X-Foo": "bar"}, "models": ["m"]}
+        save_targets(p, [t])
+        back = load_targets(p)
+        self.assertEqual(back[0]["cookies"], "a=b; c=d")
+        self.assertEqual(back[0]["headers"], {"X-Foo": "bar"})
