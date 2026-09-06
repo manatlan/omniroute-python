@@ -131,6 +131,33 @@ def handle(h, method):
             webhooks._fire(hook["url"], {"event": "test", "msg": "hello from omniroute-lite"})
             h._send(200, {"ok": True})
             return True
+    if parts[0] == "chains":
+        if method == "GET" and len(parts) == 1:
+            h._send(200, {"chains": store.load_chains()})
+            return True
+        if method == "POST" and len(parts) == 1:
+            body, err = h._body()
+            if err:
+                h._send(400, {"error": {"message": "bad json"}})
+                return True
+            chains = store.load_chains()
+            c = (body or {}).get("chain")
+            known = [t.get("name") for t in _list()]
+            err = store.validate_chain(c, known) if c else "chain required"
+            if err:
+                h._send(400, {"error": {"message": err}})
+                return True
+            if any(x["name"] == c["name"] for x in chains):
+                h._send(400, {"error": {"message": "name exists"}})
+                return True
+            chains.append({"name": c["name"], "members": c["members"]})
+            h._send(200, {"chains": store.save_chains(chains)})
+            return True
+        if method == "DELETE" and len(parts) == 2:
+            import urllib.parse as _up
+            chains = [c for c in store.load_chains() if c["name"] != _up.unquote(parts[1])]
+            h._send(200, {"chains": store.save_chains(chains)})
+            return True
     if parts[0] == "models" and method == "GET" and len(parts) == 1:
         h._send(200, {"models": configured_model_map()})
         return True

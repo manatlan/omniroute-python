@@ -228,3 +228,48 @@ class TPassthrough(unittest.TestCase):
             self.assertEqual(body, "data: 1\n\ndata: 2\n\ndata: [DONE]\n\n")
         finally:
             _s.load_targets = o
+
+
+class TChain(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        router._reset()
+
+    def _post(self, payload, targets, chains, by_name):
+        import store as _s, providers as _p
+        o = (_s.load_targets, _s.load_chains, _p.call_target)
+        _s.load_targets = lambda *a: targets
+        _s.load_chains = lambda: chains
+        seen = []
+        def fake(t, p, timeout=30):
+            seen.append((t["name"], p.get("model")))
+            return by_name[t["name"]]
+        _p.call_target = fake
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps(payload), {"Content-Type": "application/json"})
+            r = c.getresponse()
+            return r.status, r.read(), seen
+        finally:
+            _s.load_targets, _s.load_chains, _p.call_target = o
+
+    def test_chain_order_and_model_rewrite(self):
+        ts = [{"name": "a", "models": ["x"]}, {"name": "b", "models": ["y"]}]
+        code, _, seen = self._post({"model": "chain:c", "messages": []}, ts, [{"name": "c", "members": ["b", "a"]}],
+            {"a": (200, {}, b'{"choices":[]}'), "b": (500, {}, b"err")})
+        self.assertEqual(code, 200)
+        self.assertEqual(seen, [("b", "y"), ("a", "x")])  # declared order, real models upstream
+
+    def test_unknown_chain_404(self):
+        code, _, _ = self._post({"model": "chain:nope", "messages": []}, [], [], {})
+        self.assertEqual(code, 404)

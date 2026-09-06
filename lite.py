@@ -20,6 +20,18 @@ def _classify(t, model, code, hdrs):
     return router.classify(t, model, code, hdrs)
 
 
+def _resolve(model):
+    """-> (targets, err). Expands chain:NAME to member targets in declared order."""
+    all_targets = store.load_targets()
+    if model.startswith("chain:"):
+        want = next((c["members"] for c in store.load_chains() if c["name"] == model[6:]), None)
+        if want is None:
+            return [], "unknown chain"
+        by_name = {t.get("name"): t for t in all_targets}
+        return router.chain([by_name[n] for n in want if n in by_name], model, keep_order=True), None
+    return router.chain(all_targets, model), None
+
+
 def _fire_breaker(t, model, code, hdrs):
     prov = _classify(t, model, code, hdrs)
     if prov:
@@ -77,7 +89,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/v1/models":
             if not self._authed():
                 return self._deny()
-            return self._send(200, {"object": "list", "data": store.model_list(store.load_targets())})
+            data = store.model_list(store.load_targets())
+            data += [{"id": "chain:" + c["name"], "object": "model"} for c in store.load_chains()]
+            return self._send(200, {"object": "list", "data": data})
         if self.path == "/":
             try:
                 with open("dashboard.html", "rb") as f:
@@ -117,14 +131,19 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(hit)))
                     self.end_headers()
                     return self.wfile.write(hit)
-            targets = router.chain(store.load_targets(), model)
+            targets, cerr = _resolve(model)
+            if cerr:
+                return self._send(404, {"error": {"message": cerr}})
             if not targets:
                 return self._send(503, {"error": {"message": "no targets configured"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
                 name = t.get("name", "")
+                want = payload.get("model", "")
+                use_model = want if want in t.get("models", []) else (t.get("models") or [want])[0]
+                attempt = payload if use_model == want else {**payload, "model": use_model}
                 if payload.get("stream") and t.get("kind", "openai") in ("openai", "ollama", "azure"):
-                    scode, hdrs, chunks = providers.stream_target(t, payload)
+                    scode, hdrs, chunks = providers.stream_target(t, attempt)
                     if scode == 200:
                         router.note_success(name)
                         router.note_provider_ok(t)
@@ -141,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     code, body = scode, chunks
                 else:
-                    code, hdrs, body = providers.call_target(t, payload)
+                    code, hdrs, body = providers.call_target(t, attempt)
                 if code not in router.FAILOVER:
                     router.note_success(name)
                     router.note_provider_ok(t)
@@ -167,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     return self.wfile.write(body)
-                _fire_breaker(t, model, code, hdrs)
+                _fire_breaker(t, attempt.get("model", ""), code, hdrs)
                 last = (code, body)
             code, body = last
             stats.note(None, False, int((_tt.time() - _t0) * 1000))
@@ -214,11 +233,13 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
             model = payload.get("model", "")
-            targets = router.chain(store.load_targets(), model)
+            targets, cerr = _resolve(model)
+            if cerr:
+                return self._send(404, {"error": {"message": cerr}})
             if not targets:
                 return self._send(503, {"error": {"message": "no targets configured"}})
             t = targets[0]
-            probe = {"model": model or (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+            probe = {"model": model if model in t.get("models", []) else (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
             start = _t.time()
             code, hdrs, body = providers.call_target(t, probe)
             ms = int((_t.time() - start) * 1000)

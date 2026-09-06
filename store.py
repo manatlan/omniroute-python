@@ -146,3 +146,35 @@ def save_targets(path, targets):
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
     _cache["mtime"] = 0  # force reload on next read
+
+
+def load_chains():
+    import json
+    import os
+    p = os.path.join(os.path.expanduser("~"), ".omniroute-lite", "chains.json")
+    try:
+        with open(p) as f:
+            chains = json.load(f)
+        return chains if isinstance(chains, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_chains(chains):
+    import json
+    p = data_path("chains.json")
+    with open(p, "w") as f:
+        json.dump(chains, f)
+    return chains
+
+
+def validate_chain(c, known):
+    if not isinstance(c, dict) or not c.get("name"):
+        return "name required"
+    members = c.get("members", [])
+    if not isinstance(members, list) or not members:
+        return "members must be a non-empty list of API names"
+    unknown = [m for m in members if m not in known]
+    if unknown:
+        return "unknown APIs: " + ", ".join(unknown)
+    return None

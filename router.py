@@ -97,12 +97,13 @@ def pick(targets, model):
     return lst[0] if lst else None
 
 
-def chain(targets, model):
+def chain(targets, model, keep_order=False):
     """model-match first (config order kept), skipping cooled keys, locked models, open breakers."""
     out = [t for t in targets
            if not is_cool(t.get("name", "")) and not breaker_open(t)
            and not model_locked(t.get("name", ""), model)]
-    out.sort(key=lambda t: model not in t.get("models", []))
+    if not keep_order:
+        out.sort(key=lambda t: model not in t.get("models", []))
     return out
 
 
