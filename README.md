@@ -51,5 +51,17 @@ Black and white, no manual needed. Seven tabs:
 
 First run is open; press New key once and the server + dashboard lock to it.
 
+## Everything the full router has, lite edition
+- **245 providers, 1213 models** in the Providers tab, generated from the main
+  OmniRoute registry (`python3 /tmp/gen_catalog.py` to refresh). FREE tags come
+  from its hand-curated free-tier catalog. Search to find anything.
+- **Web cookies**: cookie-auth providers are flagged; paste the browser cookie
+  as the key, or add extra `cookies` / `headers` per API (keys.toml or dashboard).
+- **Click around**: every model button Tests that model; Chat tab streams full
+  conversations; Logs tab shows every call.
+- **Chains**: named ordered failover lists, usable as `chain:name` anywhere
+  (opencode included).
+- Same 3-layer resilience, keep-alive pool, opt-in cache, trim, webhooks.
+
 ## Tests
 `python3 -m unittest` (41 tests, stdlib only).
