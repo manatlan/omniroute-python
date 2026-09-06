@@ -15,6 +15,8 @@ ROUTES = {
     ("POST", "/admin/key/rotate"), ("POST", "/admin/webhooks"), ("POST", "/admin/webhooks/*/test"),
     ("POST", "/admin/restart"),
     ("POST", "/v1/chat/completions"),
+    ("GET", "/admin/chains"), ("POST", "/admin/chains"), ("DELETE", "/admin/chains/*"),
+    ("POST", "/v1/test/call"), ("GET", "/admin/logs?limit=100"),
     ("DELETE", "/admin/targets/*"), ("DELETE", "/admin/webhooks/*"),
 }
 
@@ -98,11 +100,11 @@ class T(unittest.TestCase):
         body = r.read().decode()
         self.assertEqual(r.status, 200)
         self.assertIn("text/html", r.getheader("Content-Type"))
-        for sec in ["s-home", "s-apis", "s-prov", "s-quota", "s-key", "s-web", "s-restart"]:
+        for sec in ["s-home", "s-apis", "s-prov", "s-quota", "s-key", "s-web", "s-restart", "s-logs"]:
             self.assertIn('id="%s"' % sec, body)
         for sec in ["s-chat"]:
             self.assertIn('id="%s"' % sec, body)
-        for name in ["Home", "APIs", "Providers", "Chat", "Quota", "Key", "Webhooks", "Restart"]:
+        for name in ["Home", "APIs", "Providers", "Chat", "Logs", "Quota", "Key", "Webhooks", "Restart"]:
             self.assertIn("'%s'" % name, body)
         self.assertNotIn("<img", body)
 

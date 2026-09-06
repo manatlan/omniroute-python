@@ -58,6 +58,12 @@
   <label>Key</label><input id="f-key" placeholder="paste key, or - for none">
   <label>Models (comma apart)</label><input id="f-models" placeholder="llama-3.3-70b-versatile">
   <button class="primary" id="f-add" style="width:100%">Add</button>
+  <h3>Chains</h3>
+  <div class="muted">Try APIs in order until one works. Use as model <b>chain:name</b>.</div>
+  <div id="chain-list"></div>
+  <label>Name</label><input id="ch-name" placeholder="cheap-first">
+  <label>APIs in order (comma apart)</label><input id="ch-members" placeholder="groq, ollama-local">
+  <button class="primary" id="ch-add" style="width:100%">Add chain</button>
 </section>
 
 <section id="s-chat">
@@ -73,6 +79,11 @@
   <input id="prov-q" placeholder="find provider or model…">
   <label class="row"><input type="checkbox" id="free-only" style="width:auto;min-height:0"> <span>Free only</span></label>
   <div id="prov-list"></div>
+</section>
+
+<section id="s-logs">
+  <table><thead><tr><th>time</th><th>what</th><th>API</th><th>model</th><th>code</th><th>ms</th></tr></thead>
+  <tbody id="l-rows"></tbody></table>
 </section>
 
 <section id="s-quota">
@@ -117,7 +128,7 @@ async function api(method, path, body) {
   }
   return r.json();
 }
-const TABS = [['home','Home'],['apis','APIs'],['prov','Providers'],['chat','Chat'],['quota','Quota'],
+const TABS = [['home','Home'],['apis','APIs'],['prov','Providers'],['chat','Chat'],['logs','Logs'],['quota','Quota'],
               ['key','Key'],['web','Webhooks'],['restart','Restart']];
 const nav = document.getElementById('tabs');
 TABS.forEach(([id, name], i) => {
@@ -132,7 +143,7 @@ function show(id) {
   document.getElementById('s-' + id).classList.add('on');
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('primary'));
   document.getElementById('tab-' + id).classList.add('primary');
-  ({home: loadHome, apis: loadApis, prov: loadProv, chat: loadChat, quota: loadQuota, key: loadKey,
+  ({home: loadHome, apis: loadApis, prov: loadProv, chat: loadChat, logs: loadLogs, quota: loadQuota, key: loadKey,
     web: loadWeb, restart: loadRestart})[id]();
 }
 const mask = k => k ? '••••' + String(k).slice(-4) : '—';
@@ -181,6 +192,25 @@ async function loadApis() {
       mb.textContent = (res.ok ? '✓ ' : '✕ ') + mb.dataset.m;
       setTimeout(loadApis, 2000); });
   });
+  const {chains} = await api('GET', '/admin/chains');
+  const cbox = document.getElementById('chain-list');
+  cbox.innerHTML = chains.length ? '' : '<div class="card">No chains. One API is already a chain of one.</div>';
+  chains.forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<div class="row"><b class="grow">chain:${c.name}</b></div><div class="muted">${c.members.join(' → ')}</div>`;
+    const r = document.createElement('div');
+    r.className = 'row'; r.style.marginTop = '8px';
+    const tb = document.createElement('button'); tb.textContent = 'Test';
+    tb.onclick = async () => { tb.disabled = true;
+      const res = await api('POST', '/v1/test/call', {model: 'chain:' + c.name});
+      tb.textContent = res.ok ? 'Works ✓ (' + res.target + ')' : 'Fails ✕';
+      setTimeout(loadApis, 2000); };
+    const del = document.createElement('button'); del.textContent = 'Remove';
+    del.onclick = async () => { if (confirm('Remove chain ' + c.name + '?')) {
+      await api('DELETE', '/admin/chains/' + encodeURIComponent(c.name)); loadApis(); } };
+    r.append(tb, del); d.append(r); cbox.append(d);
+  });
   const sel = document.getElementById('f-preset');
   if (!sel.options.length) {
     PRESETS = (await api('GET', '/admin/presets')).presets;
@@ -202,6 +232,15 @@ document.getElementById('f-add').onclick = async () => {
   const res = await api('POST', '/admin/targets', {target: t});
   if (res.error) { alert(res.error.message); return; }
   document.querySelectorAll('#s-apis input').forEach(i => i.value = '');
+  loadApis();
+};
+document.getElementById('ch-add').onclick = async () => {
+  const res = await api('POST', '/admin/chains', {chain: {
+    name: document.getElementById('ch-name').value.trim(),
+    members: document.getElementById('ch-members').value.split(',').map(s => s.trim()).filter(Boolean)}});
+  if (res.error) { alert(res.error.message); return; }
+  document.getElementById('ch-name').value = '';
+  document.getElementById('ch-members').value = '';
   loadApis();
 };
 async function loadProv() {
@@ -309,6 +348,17 @@ document.getElementById('c-send').onclick = async () => {
   HIST.push({role: 'assistant', content: reply});
   box.scrollTop = box.scrollHeight;
 };
+async function loadLogs() {
+  const {logs} = await api('GET', '/admin/logs?limit=100');
+  const tb = document.getElementById('l-rows');
+  tb.innerHTML = '';
+  logs.forEach(e => {
+    const t = new Date(e.ts * 1000).toLocaleTimeString();
+    tb.insertAdjacentHTML('beforeend',
+      `<tr><td>${t}</td><td>${e.ep}</td><td>${e.target || '—'}</td><td>${e.model || '—'}</td><td>${e.code}</td><td>${e.ms}</td></tr>`);
+  });
+  if (!tb.children.length) tb.innerHTML = '<tr><td colspan="6">Quiet so far.</td></tr>';
+}
 async function loadQuota() {
   const q = await api('GET', '/admin/quota');
   const tb = document.getElementById('q-rows');
