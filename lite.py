@@ -32,6 +32,32 @@ def _resolve(model):
     return router.chain(all_targets, model), None
 
 
+def _datadir():
+    import os as _o
+    return _o.environ.get("LITE_DATA_DIR") or _o.path.join(_o.path.expanduser("~"), ".omniroute-lite")
+
+
+def _log(ep, target, model, code, ms):
+    """one JSONL line per upstream request. Best-effort; capped at ~1MB."""
+    try:
+        import json as _j
+        import os as _o
+        import time as _t
+        d = _datadir()
+        _o.makedirs(d, exist_ok=True)
+        p = _o.path.join(d, "requests.jsonl")
+        if _o.path.exists(p) and _o.path.getsize(p) > 1024 * 1024:
+            with open(p, "rb") as f:
+                tail = f.read().splitlines()[-500:]
+            with open(p, "wb") as f:
+                f.write(b"\n".join(tail) + b"\n")
+        with open(p, "a") as f:
+            f.write(_j.dumps({"ts": int(_t.time()), "ep": ep, "target": target,
+                              "model": model, "code": code, "ms": ms}) + "\n")
+    except OSError:
+        pass  # ponytail: logging never breaks requests
+
+
 def _fire_breaker(t, model, code, hdrs):
     prov = _classify(t, model, code, hdrs)
     if prov:
@@ -147,7 +173,9 @@ class Handler(BaseHTTPRequestHandler):
                     if scode == 200:
                         router.note_success(name)
                         router.note_provider_ok(t)
-                        stats.note(name, True, int((_tt.time() - _t0) * 1000))
+                        ms = int((_tt.time() - _t0) * 1000)
+                        stats.note(name, True, ms)
+                        _log("chat", name, attempt.get("model", ""), 200, ms)
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
                         self.send_header("Cache-Control", "no-cache")
@@ -164,7 +192,9 @@ class Handler(BaseHTTPRequestHandler):
                 if code not in router.FAILOVER:
                     router.note_success(name)
                     router.note_provider_ok(t)
-                    stats.note(name, code < 400, int((_tt.time() - _t0) * 1000))
+                    ms = int((_tt.time() - _t0) * 1000)
+                    stats.note(name, code < 400, ms)
+                    _log("chat", name, attempt.get("model", ""), code, ms)
                     import json as _jj
                     if payload.get("stream"):
                         # ponytail: synthesized SSE from full text, true passthrough when latency proves needed
@@ -189,7 +219,9 @@ class Handler(BaseHTTPRequestHandler):
                 _fire_breaker(t, attempt.get("model", ""), code, hdrs)
                 last = (code, body)
             code, body = last
-            stats.note(None, False, int((_tt.time() - _t0) * 1000))
+            ms = int((_tt.time() - _t0) * 1000)
+            stats.note(None, False, ms)
+            _log("chat", None, model, code, ms)
             webhooks.dispatch("all_failed", {"endpoint": "chat", "model": model})
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
@@ -211,7 +243,9 @@ class Handler(BaseHTTPRequestHandler):
                 if code not in router.FAILOVER:
                     router.note_success(t.get("name", ""))
                     router.note_provider_ok(t)
-                    stats.note(t.get("name", ""), code < 400, int((_tt.time() - _t0) * 1000))
+                    ms = int((_tt.time() - _t0) * 1000)
+                    stats.note(t.get("name", ""), code < 400, ms)
+                    _log("embeddings", t.get("name", ""), model, code, ms)
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))
@@ -220,7 +254,9 @@ class Handler(BaseHTTPRequestHandler):
                 _fire_breaker(t, model, code, hdrs)
                 last = (code, body)
             code, body = last
-            stats.note(None, False, int((_tt.time() - _t0) * 1000))
+            ms = int((_tt.time() - _t0) * 1000)
+            stats.note(None, False, ms)
+            _log("embeddings", None, model, code, ms)
             webhooks.dispatch("all_failed", {"endpoint": "embeddings", "model": model})
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
@@ -251,6 +287,7 @@ class Handler(BaseHTTPRequestHandler):
             elif code in router.FAILOVER:
                 _fire_breaker(t, probe["model"], code, hdrs)
             stats.note(t.get("name", ""), ok, ms)
+            _log("test", t.get("name", ""), probe.get("model", ""), code, ms)
             return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
         return self._send(404, {"error": {"message": "not found"}})
 

@@ -227,3 +227,31 @@ class TModels(unittest.TestCase):
             self.assertIn("targets", by_id["llama-3.3-70b-versatile"])
         finally:
             _a.TARGETS_PATH = old
+
+
+class TLogs(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_last_lines_newest_first(self):
+        import json as _j
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        os.environ["LITE_DATA_DIR"] = tmp
+        try:
+            import lite as _l
+            _l._log("chat", "a", "m", 200, 5)
+            _l._log("chat", "b", "m", 500, 9)
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("GET", "/admin/logs?limit=10")
+            body = _j.loads(c.getresponse().read())
+            self.assertEqual([e["target"] for e in body["logs"]], ["b", "a"])
+        finally:
+            del os.environ["LITE_DATA_DIR"]

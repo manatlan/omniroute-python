@@ -79,7 +79,7 @@ def handle(h, method):
     if not h._authed():
         h._deny()
         return True
-    parts = h.path[len("/admin/"):].split("/")
+    parts = h.path.split("?", 1)[0][len("/admin/"):].split("/")
     if parts[0] == "quota" and len(parts) == 1:
         if method == "GET":
             h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
@@ -158,6 +158,30 @@ def handle(h, method):
             chains = [c for c in store.load_chains() if c["name"] != _up.unquote(parts[1])]
             h._send(200, {"chains": store.save_chains(chains)})
             return True
+    if parts[0] == "logs" and method == "GET" and len(parts) == 1:
+        import json as _j
+        import os as _o
+        import urllib.parse as _up
+        qs = _up.urlparse(h.path).query
+        try:
+            limit = max(1, min(500, int(_up.parse_qs(qs).get("limit", ["100"])[0])))
+        except ValueError:
+            limit = 100
+        p = _o.path.join(_o.environ.get("LITE_DATA_DIR") or _o.path.join(_o.path.expanduser("~"), ".omniroute-lite"), "requests.jsonl")
+        lines = []
+        try:
+            with open(p, "rb") as f:
+                lines = f.read().splitlines()[-limit:]
+        except OSError:
+            pass
+        out = []
+        for ln in reversed(lines):
+            try:
+                out.append(_j.loads(ln))
+            except ValueError:
+                continue
+        h._send(200, {"logs": out})
+        return True
     if parts[0] == "models" and method == "GET" and len(parts) == 1:
         h._send(200, {"models": configured_model_map()})
         return True
