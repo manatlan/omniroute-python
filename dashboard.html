@@ -56,6 +56,8 @@
   <label>Name</label><input id="f-name" placeholder="groq">
   <label>Address</label><input id="f-base" placeholder="https://…">
   <label>Key</label><input id="f-key" placeholder="paste key, or - for none">
+  <label>Cookies (optional, for web logins)</label><input id="f-cookies" placeholder="session=abc; other=123">
+  <label>Extra headers (optional, JSON)</label><input id="f-headers" placeholder='{"X-Foo": "bar"}'>
   <label>Models (comma apart)</label>
   <div class="row"><button id="f-fetch" style="flex:1">Fetch live list</button></div><input id="f-models" placeholder="llama-3.3-70b-versatile">
   <button class="primary" id="f-add" style="width:100%">Add</button>
@@ -174,6 +176,7 @@ async function loadApis() {
     const d = document.createElement('div');
     d.className = 'card';
     d.innerHTML = `<div class="row"><b class="grow">${t.name}</b><span class="tag">${t.kind || 'openai'}</span>` +
+      (t.provider ? `<span class="tag">${t.provider}</span>` : '') +
       `<span class="tag">${s}</span></div><div>${(t.models || []).map(m => `<button data-m="${m}" style="min-height:0;padding:6px 10px;margin:2px">${m}</button>`).join('')}</div>` +
       `<div class="muted">key ${mask(t.api_key)}</div>`;
     const r = document.createElement('div');
@@ -220,7 +223,9 @@ async function loadApis() {
     sel.onchange = () => { const p = PRESETS[sel.value]; if (!p) return;
       document.getElementById('f-base').value = p.base_url;
       document.getElementById('f-models').value = p.models.map(m => m.id).join(', ');
-      document.getElementById('f-name').value = p.provider.split(' ')[0].toLowerCase(); };
+      document.getElementById('f-name').value = p.provider.split(' ')[0].toLowerCase();
+      document.getElementById('f-key').placeholder =
+        p.auth === 'cookie' ? 'paste browser cookie here' : 'paste key, or - for none'; };
   }
 }
 document.getElementById('f-fetch').onclick = async () => {
@@ -241,6 +246,10 @@ document.getElementById('f-add').onclick = async () => {
     base_url: document.getElementById('f-base').value.trim(),
     api_key: document.getElementById('f-key').value.trim() || '-',
     models: document.getElementById('f-models').value.split(',').map(s => s.trim()).filter(Boolean)};
+  const ck = document.getElementById('f-cookies').value.trim();
+  if (ck) t.cookies = ck;
+  const hd = document.getElementById('f-headers').value.trim();
+  if (hd) { try { t.headers = JSON.parse(hd); } catch (e) { alert('Headers must be JSON.'); return; } }
   const p = PRESETS[document.getElementById('f-preset').value];
   if (p && p.kind !== 'openai') t.kind = p.kind;
   const res = await api('POST', '/admin/targets', {target: t});
@@ -340,6 +349,13 @@ document.getElementById('c-send').onclick = async () => {
     document.getElementById('c-send').onclick();
     return;
   }
+  if (!r.ok) {
+    let msg = 'error ' + r.status;
+    try { msg = (await r.json()).error.message || msg; } catch (e) {}
+    box.textContent += '⚠ ' + msg;
+    HIST.pop();
+    return;
+  }
   const rd = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '', reply = '';
@@ -375,11 +391,14 @@ async function loadLogs() {
 }
 async function loadQuota() {
   const q = await api('GET', '/admin/quota');
+  const {targets} = await api('GET', '/admin/targets');
+  const provOf = {};
+  targets.forEach(t => provOf[t.name] = t.provider || t.name);
+  const openProvs = new Set(Object.entries(q.state.breakers).filter(([_, b]) => b.open_s > 0).map(([p]) => p));
   const tb = document.getElementById('q-rows');
   tb.innerHTML = '';
   Object.entries(q.stats.by_target).forEach(([n, v]) => {
-    const br = q.state.breakers[n];
-    const st = br && br.open_s > 0 ? 'resting' : (q.state.cooldowns[n] ? 'resting ' + q.state.cooldowns[n] + 's' : 'OK');
+    const st = openProvs.has(provOf[n]) ? 'resting' : (q.state.cooldowns[n] ? 'resting ' + q.state.cooldowns[n] + 's' : 'OK');
     tb.insertAdjacentHTML('beforeend', `<tr><td>${n}</td><td>${v.ok}</td><td>${v.err}</td><td>${v.avg_ms}</td><td>${st}</td></tr>`);
   });
   if (!tb.children.length) tb.innerHTML = '<tr><td colspan="5">No calls yet.</td></tr>';
