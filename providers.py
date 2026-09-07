@@ -11,20 +11,28 @@ _plock = threading.Lock()
 
 
 def _take(scheme, host, port, timeout):
+    # -> (conn, reused). Reused conns may be half-open corpses; callers retry once.
     with _plock:
         lst = _pool.get((scheme, host, port)) or []
         while lst:
             c = lst.pop()
             try:
                 c.sock.getpeername()
-                return c
+                return c, True
             except (OSError, AttributeError):
                 try:
                     c.close()
                 except OSError:
                     pass
     cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
-    return cls(host, port, timeout=timeout)
+    return cls(host, port, timeout=timeout), False
+
+
+def _close(conn):
+    try:
+        conn.close()
+    except OSError:
+        pass
 
 
 def _give(scheme, host, port, conn):
@@ -40,26 +48,26 @@ def post(url, headers, body, timeout=30, max_body=MAX_BODY):
     path = sp.path or "/"
     if sp.query:
         path += "?" + sp.query
-    conn = _take(scheme, host, port, timeout)
-    try:
-        conn.request("POST", path, body=body, headers=headers)
-        r = conn.getresponse()
-        h = {k.lower(): v for k, v in r.getheaders()}
-        data = r.read(max_body + 1)
-        if len(data) > max_body:
-            conn.close()
-            return 502, {}, b'{"error":{"message":"upstream body too large"}}'
-        if r.will_close:
-            conn.close()
-        else:
-            _give(scheme, host, port, conn)
-        return r.status, h, data
-    except (OSError, http.client.HTTPException):
+    for _try in (0, 1):
+        conn, reused = _take(scheme, host, port, timeout)
         try:
-            conn.close()
-        except OSError:
-            pass
-        return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
+            conn.request("POST", path, body=body, headers=headers)
+            r = conn.getresponse()
+            h = {k.lower(): v for k, v in r.getheaders()}
+            data = r.read(max_body + 1)
+            if len(data) > max_body:
+                _close(conn)
+                return 502, {}, b'{"error":{"message":"upstream body too large"}}'
+            if r.will_close:
+                _close(conn)
+            else:
+                _give(scheme, host, port, conn)
+            return r.status, h, data
+        except (OSError, http.client.HTTPException):
+            _close(conn)
+            if reused and _try == 0:
+                continue  # half-open corpse; one fresh retry
+            return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
 
 
 def t_headers(t, base):
@@ -86,26 +94,26 @@ def get(url, headers, timeout=15, max_body=MAX_BODY):
     path = sp.path or "/"
     if sp.query:
         path += "?" + sp.query
-    conn = _take(scheme, host, port, timeout)
-    try:
-        conn.request("GET", path, headers=headers)
-        r = conn.getresponse()
-        h = {k.lower(): v for k, v in r.getheaders()}
-        data = r.read(max_body + 1)
-        if len(data) > max_body:
-            conn.close()
-            return 502, {}, b'{"error":{"message":"upstream body too large"}}'
-        if r.will_close:
-            conn.close()
-        else:
-            _give(scheme, host, port, conn)
-        return r.status, h, data
-    except (OSError, http.client.HTTPException):
+    for _try in (0, 1):
+        conn, reused = _take(scheme, host, port, timeout)
         try:
-            conn.close()
-        except OSError:
-            pass
-        return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
+            conn.request("GET", path, headers=headers)
+            r = conn.getresponse()
+            h = {k.lower(): v for k, v in r.getheaders()}
+            data = r.read(max_body + 1)
+            if len(data) > max_body:
+                _close(conn)
+                return 502, {}, b'{"error":{"message":"upstream body too large"}}'
+            if r.will_close:
+                _close(conn)
+            else:
+                _give(scheme, host, port, conn)
+            return r.status, h, data
+        except (OSError, http.client.HTTPException):
+            _close(conn)
+            if reused and _try == 0:
+                continue  # half-open corpse; one fresh retry
+            return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
 
 
 def discover_models(kind, base_url, api_key, timeout=15):
@@ -152,7 +160,10 @@ def valid_chat(body):
     try:
         import json as _j
         ch = _j.loads(body).get("choices")
-        return bool(ch) and isinstance(ch[0].get("message", {}).get("content"), str)
+        if not ch:
+            return False
+        msg = ch[0].get("message", {})
+        return isinstance(msg, dict) and (isinstance(msg.get("content"), str) or isinstance(msg.get("tool_calls"), list))
     except (ValueError, AttributeError, IndexError, TypeError):
         return False
 
@@ -188,9 +199,18 @@ def from_anthropic(body):
 
 
 def to_gemini(payload):
-    """OpenAI chat -> Gemini generateContent. ponytail: text-only first."""
-    parts = [{"text": m.get("content", "")} for m in payload.get("messages", []) if m.get("role") in ("user", "system")]
-    return {"contents": [{"role": "user", "parts": parts}]}
+    # OpenAI chat -> Gemini contents. Assistant turns kept as model; same-role runs merged.
+    contents = []
+    for m in payload.get("messages", []) or []:
+        role = "model" if m.get("role") == "assistant" else "user"
+        part = {"text": m.get("content") or ""}
+        if contents and contents[-1]["role"] == role:
+            contents[-1]["parts"].append(part)
+        else:
+            contents.append({"role": role, "parts": [part]})
+    if not contents or contents[0]["role"] != "user":
+        contents.insert(0, {"role": "user", "parts": [{"text": ""}]})
+    return {"contents": contents}
 
 
 def from_gemini(body):
@@ -230,7 +250,7 @@ def _call_raw(t, payload, timeout=30):
 
 
 def post_stream(url, headers, body, timeout=30, chunk=65536):
-    """-> (200, headers, chunk-iterator) or (errcode, headers, error-bytes). Never raises."""
+    # -> (200, headers, chunk-iterator) or (errcode, headers, error-bytes). Never raises.
     import urllib.parse as _up
     import http.client as _hc
     sp = _up.urlsplit(url)
@@ -239,15 +259,25 @@ def post_stream(url, headers, body, timeout=30, chunk=65536):
     path = sp.path or "/"
     if sp.query:
         path += "?" + sp.query
-    conn = _take(scheme, host, port, timeout)
+    r = None
+    for _try in (0, 1):
+        conn, reused = _take(scheme, host, port, timeout)
+        try:
+            conn.request("POST", path, body=body, headers=headers)
+            r = conn.getresponse()
+            break
+        except (OSError, _hc.HTTPException):
+            _close(conn)
+            if reused and _try == 0:
+                continue  # half-open corpse; one fresh retry
+            return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
     try:
-        conn.request("POST", path, body=body, headers=headers)
-        r = conn.getresponse()
         h = {k.lower(): v for k, v in r.getheaders()}
         if r.status != 200:
             data = r.read(MAX_BODY + 1)
-            conn.close()
+            _close(conn)
             return r.status, h, data
+
         def gen():
             try:
                 while True:
@@ -256,13 +286,10 @@ def post_stream(url, headers, body, timeout=30, chunk=65536):
                         break
                     yield b
             finally:
-                conn.close()
+                _close(conn)
         return r.status, h, gen()
     except (OSError, _hc.HTTPException):
-        try:
-            conn.close()
-        except OSError:
-            pass
+        _close(conn)
         return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
 
 
@@ -279,14 +306,25 @@ def stream_target(t, payload, timeout=30):
         json.dumps({**payload, "stream": True}).encode(), timeout)
 
 
+def valid_embed(body):
+    # True if body carries a non-empty embedding vector.
+    try:
+        import json as _j
+        d = _j.loads(body).get("data")
+        return bool(d) and isinstance(d[0].get("embedding"), list) and bool(d[0]["embedding"])
+    except (ValueError, AttributeError, IndexError, TypeError):
+        return False
+
+
 def embed_target(t, payload, timeout=30):
     """embeddings -> (status, headers, body). gemini: str input only."""
     kind = t.get("kind", "openai")
     if kind == "azure":
         ver = t.get("api_version", "2024-06-01")
-        return post(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/embeddings?api-version=" + ver,
+        code, h, body = post(t["base_url"].rstrip("/") + "/openai/deployments/" + payload.get("model", "") + "/embeddings?api-version=" + ver,
             t_headers(t, {"api-key": t["api_key"]}),
             json.dumps(payload).encode(), timeout)
+        return _gate_embed(code, h, body)
     if kind == "gemini":
         text = payload.get("input", "")
         if not isinstance(text, str):
@@ -297,11 +335,18 @@ def embed_target(t, payload, timeout=30):
         if code == 200:
             try:
                 vec = json.loads(body)["embedding"]["values"]
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, TypeError, AttributeError):
                 vec = []
             body = json.dumps({"data": [{"embedding": vec, "index": 0}], "model": payload.get("model", "")}).encode()
-        return code, h, body
-    return forward(t["base_url"], t.get("api_key", "-"), "/v1/embeddings", payload, timeout, extra=t)
+        return _gate_embed(code, h, body)
+    code, h, body = forward(t["base_url"], t.get("api_key", "-"), "/v1/embeddings", payload, timeout, extra=t)
+    return _gate_embed(code, h, body)
+
+
+def _gate_embed(code, h, body):
+    if code == 200 and not valid_embed(body):
+        return 502, h, b'{"error":{"message":"upstream bad shape"}}'
+    return code, h, body
 
 
 def call_target(t, payload, timeout=30):
