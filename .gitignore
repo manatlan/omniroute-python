@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .omniroute-lite/
 *.db
+keys.toml
