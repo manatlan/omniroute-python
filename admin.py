@@ -43,15 +43,20 @@ def targets_crud(method, parts, body):
         model = (body or {}).get("model") or (t.get("models") or [""])[0]
         probe = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
         start = time.time()
-        code, hdrs, _ = providers.call_target(t, probe)
+        code, hdrs, body = providers.call_target(t, probe)
         ms = int((time.time() - start) * 1000)
-        ok = code not in router.FAILOVER
+        ok = code not in router.FAILOVER and providers.probe_ok(body)
+        shaped = b"bad shape" in body
+        reason = None if ok else ("bad shape" if shaped else "http " + str(code))
         if ok:
             router.note_success(name)
             router.note_provider_ok(t)
         else:
             router.classify(t, model, code, hdrs)
-        return 200, {"ok": ok, "target": name, "status": code, "latency_ms": ms}
+        out = {"ok": ok, "target": name, "status": code, "latency_ms": ms}
+        if reason:
+            out["reason"] = reason
+        return 200, out
     if len(parts) == 1 and method in ("PUT", "DELETE"):
         name = urllib.parse.unquote(parts[0])
         i = next((i for i, x in enumerate(targets) if x.get("name") == name), None)

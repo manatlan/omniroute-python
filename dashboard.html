@@ -180,7 +180,7 @@ async function loadApis() {
     const tb = document.createElement('button'); tb.textContent = 'Test';
     tb.onclick = async () => { tb.disabled = true;
       const res = await api('POST', '/admin/targets/' + encodeURIComponent(t.name) + '/test', {});
-      tb.textContent = res.ok ? 'Works ✓ (' + res.latency_ms + 'ms)' : 'Fails ✕ (' + res.status + ')';
+      tb.textContent = res.ok ? 'Works ✓ (' + res.latency_ms + 'ms)' : 'Fails ✕ (' + (res.reason || res.status) + ')';
       setTimeout(loadApis, 1500); };
     const del = document.createElement('button'); del.textContent = 'Remove';
     del.onclick = async () => { if (confirm('Remove ' + t.name + '?')) {
@@ -189,7 +189,7 @@ async function loadApis() {
     d.querySelectorAll('[data-m]').forEach(mb => mb.onclick = async () => {
       mb.disabled = true;
       const res = await api('POST', '/admin/targets/' + encodeURIComponent(t.name) + '/test', {model: mb.dataset.m});
-      mb.textContent = (res.ok ? '✓ ' : '✕ ') + mb.dataset.m;
+      mb.textContent = res.ok ? '✓ ' + mb.dataset.m : '✕ ' + (res.reason || res.status);
       setTimeout(loadApis, 2000); });
   });
   const {chains} = await api('GET', '/admin/chains');
@@ -204,7 +204,7 @@ async function loadApis() {
     const tb = document.createElement('button'); tb.textContent = 'Test';
     tb.onclick = async () => { tb.disabled = true;
       const res = await api('POST', '/v1/test/call', {model: 'chain:' + c.name});
-      tb.textContent = res.ok ? 'Works ✓ (' + res.target + ')' : 'Fails ✕';
+      tb.textContent = res.ok ? 'Works ✓ (' + res.target + ')' : 'Fails ✕ (' + (res.reason || res.status) + ')';
       setTimeout(loadApis, 2000); };
     const del = document.createElement('button'); del.textContent = 'Remove';
     del.onclick = async () => { if (confirm('Remove chain ' + c.name + '?')) {

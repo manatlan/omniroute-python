@@ -96,10 +96,10 @@ class TCookies(unittest.TestCase):
                 seen["cookie"] = self.headers.get("Cookie")
                 seen["x"] = self.headers.get("X-Custom")
                 seen["auth"] = self.headers.get("Authorization")
-                out = b"{}"
+                out = b'{"choices":[{"message":{"role":"assistant","content":"hi"}}]}'
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", "2")
+                self.send_header("Content-Length", str(len(out)))
                 self.end_headers()
                 self.wfile.write(out)
 
@@ -129,3 +129,43 @@ class TCookies(unittest.TestCase):
         back = load_targets(p)
         self.assertEqual(back[0]["cookies"], "a=b; c=d")
         self.assertEqual(back[0]["headers"], {"X-Foo": "bar"})
+
+
+class TShape(unittest.TestCase):
+    def test_valid_and_probe(self):
+        good = b'{"choices":[{"message":{"role":"assistant","content":"hi"}}]}'
+        self.assertTrue(providers.valid_chat(good))
+        self.assertTrue(providers.probe_ok(good))
+        self.assertFalse(providers.valid_chat(b"<html>nope</html>"))
+        self.assertFalse(providers.probe_ok(b"<html>nope</html>"))
+        self.assertFalse(providers.valid_chat(b'{"error":{"message":"x"}}'))
+        empty = b'{"choices":[{"message":{"role":"assistant","content":""}}]}'
+        self.assertTrue(providers.valid_chat(empty))
+
+    def test_200_html_becomes_502(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+
+        class Html(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(n)
+                out = b"<html>web page</html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Html)
+        Thread(target=srv.serve_forever, daemon=True).start()
+        code, _, _ = providers.call_target(
+            {"base_url": f"http://127.0.0.1:{srv.server_address[1]}/v1", "api_key": "-"},
+            {"model": "m", "messages": []})
+        srv.shutdown()
+        self.assertEqual(code, 502)

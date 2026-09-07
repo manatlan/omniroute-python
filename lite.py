@@ -279,7 +279,7 @@ class Handler(BaseHTTPRequestHandler):
             start = _t.time()
             code, hdrs, body = providers.call_target(t, probe)
             ms = int((_t.time() - start) * 1000)
-            ok = code not in router.FAILOVER
+            ok = code not in router.FAILOVER and providers.probe_ok(body)
             name = t.get("name", "")
             if ok:
                 router.note_success(name)
@@ -288,7 +288,10 @@ class Handler(BaseHTTPRequestHandler):
                 _fire_breaker(t, probe["model"], code, hdrs)
             stats.note(t.get("name", ""), ok, ms)
             _log("test", t.get("name", ""), probe.get("model", ""), code, ms)
-            return self._send(200 if ok else code, {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms})
+            out = {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms}
+            if not ok:
+                out["reason"] = "bad shape" if b"bad shape" in body else "http " + str(code)
+            return self._send(200 if ok else code, out)
         return self._send(404, {"error": {"message": "not found"}})
 
     def log_message(self, *a):

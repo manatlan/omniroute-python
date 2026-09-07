@@ -255,3 +255,39 @@ class TLogs(unittest.TestCase):
             self.assertEqual([e["target"] for e in body["logs"]], ["b", "a"])
         finally:
             del os.environ["LITE_DATA_DIR"]
+
+
+class TProbeShape(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_html_probe_reports_bad_shape(self):
+        import tempfile
+        import providers as _p
+        tmp = os.path.join(tempfile.mkdtemp(), "keys.toml")
+        old_path, admin.TARGETS_PATH = admin.TARGETS_PATH, tmp
+        old_raw = _p._call_raw
+        _p._call_raw = lambda t, p, timeout=30: (200, {}, b"<html>web</html>")
+        old_key = os.environ.pop("LITE_KEY", None)
+        try:
+            store.save_targets(tmp, [{"name": "w", "base_url": "https://x/v1", "api_key": "-", "models": ["m"]}])
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/admin/targets/w/test", json.dumps({"model": "m"}),
+                      {"Content-Type": "application/json"})
+            r = c.getresponse()
+            body = json.loads(r.read())
+            self.assertEqual(r.status, 200)
+            self.assertFalse(body["ok"])
+            self.assertEqual(body["reason"], "bad shape")
+        finally:
+            admin.TARGETS_PATH = old_path
+            _p._call_raw = old_raw
+            if old_key is not None:
+                os.environ["LITE_KEY"] = old_key

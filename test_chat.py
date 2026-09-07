@@ -273,3 +273,45 @@ class TChain(unittest.TestCase):
     def test_unknown_chain_404(self):
         code, _, _ = self._post({"model": "chain:nope", "messages": []}, [], [], {})
         self.assertEqual(code, 404)
+
+
+class TBadShape(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        router._reset()
+
+    def test_html_200_fails_over(self):
+        import store as _s, providers as _p
+        o = (_s.load_targets, _s.load_chains, _p._call_raw)
+        _s.load_targets = lambda *a: [{"name": "web", "models": ["m"]}, {"name": "real", "models": ["m"]}]
+        _s.load_chains = lambda: []
+        seen = []
+
+        def fake(t, p, timeout=30):
+            seen.append(t["name"])
+            if t["name"] == "web":
+                return 200, {}, b"<html>login page</html>"
+            return 200, {}, b'{"choices":[{"message":{"content":"hi"}}]}'
+
+        _p._call_raw = fake
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps({"model": "m", "messages": []}),
+                      {"Content-Type": "application/json"})
+            r = c.getresponse()
+            body = json.loads(r.read())
+            self.assertEqual(r.status, 200)
+            self.assertEqual(body["choices"][0]["message"]["content"], "hi")
+            self.assertEqual(seen, ["web", "real"])
+        finally:
+            _s.load_targets, _s.load_chains, _p._call_raw = o

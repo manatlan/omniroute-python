@@ -82,6 +82,28 @@ def forward(base_url, api_key, path, payload, timeout=30, extra=None):
     return post(url, t_headers(extra or {}, auth), json.dumps(payload).encode(), timeout)[:3]
 
 
+
+
+def valid_chat(body):
+    """True if body is OpenAI-shape chat with usable text. Rejects HTML/error pages."""
+    try:
+        import json as _j
+        ch = _j.loads(body).get("choices")
+        return bool(ch) and isinstance(ch[0].get("message", {}).get("content"), str)
+    except (ValueError, AttributeError, IndexError, TypeError):
+        return False
+
+
+def probe_ok(body):
+    """Looser: any parsed choices+message (probe uses max_tokens 1, content may be empty)."""
+    try:
+        import json as _j
+        ch = _j.loads(body).get("choices")
+        return bool(ch) and isinstance(ch[0].get("message"), dict)
+    except (ValueError, AttributeError, IndexError, TypeError):
+        return False
+
+
 def to_anthropic(payload):
     """OpenAI chat -> Anthropic messages. ponytail: text-only, images when proven needed."""
     system = "\n".join(m.get("content", "") for m in payload.get("messages", []) if m.get("role") == "system")
@@ -94,9 +116,12 @@ def to_anthropic(payload):
 
 def from_anthropic(body):
     """Anthropic response -> OpenAI chat shape."""
-    d = json.loads(body) if isinstance(body, (bytes, bytearray)) else body
-    text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
-    return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": d.get("stop_reason", "stop")}]}
+    try:
+        d = json.loads(body) if isinstance(body, (bytes, bytearray)) else body
+        text = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
+        return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": d.get("stop_reason", "stop")}]}
+    except (ValueError, AttributeError, TypeError):
+        return {"choices": []}
 
 
 def to_gemini(payload):
@@ -106,16 +131,16 @@ def to_gemini(payload):
 
 
 def from_gemini(body):
-    """Gemini response -> OpenAI chat shape."""
-    d = json.loads(body) if isinstance(body, (bytes, bytearray)) else body
+    """Gemini response -> OpenAI chat shape. Never raises; [] means unparseable."""
     try:
+        d = json.loads(body) if isinstance(body, (bytes, bytearray)) else body
         text = "".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"])
-    except (KeyError, IndexError):
-        text = ""
+    except (KeyError, IndexError, ValueError, AttributeError, TypeError):
+        return {"choices": []}
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}
 
 
-def call_target(t, payload, timeout=30):
+def _call_raw(t, payload, timeout=30):
     """kind-aware dispatch -> (status, headers, body). kinds: openai | ollama | anthropic | gemini | azure."""
     kind = t.get("kind", "openai")
     if kind == "anthropic":
@@ -214,3 +239,11 @@ def embed_target(t, payload, timeout=30):
             body = json.dumps({"data": [{"embedding": vec, "index": 0}], "model": payload.get("model", "")}).encode()
         return code, h, body
     return forward(t["base_url"], t.get("api_key", "-"), "/v1/embeddings", payload, timeout, extra=t)
+
+
+def call_target(t, payload, timeout=30):
+    # shape gate: HTTP 200 with a non-chat body becomes 502 (failover).
+    code, h, body = _call_raw(t, payload, timeout)
+    if code == 200 and not valid_chat(body):
+        return 502, h, b'{"error":{"message":"upstream bad shape"}}'
+    return code, h, body
