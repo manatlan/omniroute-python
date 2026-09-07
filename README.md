@@ -58,9 +58,7 @@ First run is open; press New key once and the server + dashboard lock to it.
 - **Web cookies**: cookie-auth providers are flagged; the Add form has Cookies and
   Extra-headers boxes, and the key box tells you when a cookie goes there.
 - **Ollama is optional**: the preset points at your laptop, but the Address box takes
-  any remote OpenAI-compatible server. Nothing must be installed locally.
-- **Web cookies**: cookie-auth providers are flagged; paste the browser cookie
-  as the key, or add extra `cookies` / `headers` per API (keys.toml or dashboard).
+  any remote OpenAI-compatible server, key or no key. Nothing must be installed locally.
 - **Click around**: every model button Tests that model; Chat tab streams full
   conversations; Logs tab shows every call.
 - **Chains**: named ordered failover lists, usable as `chain:name` anywhere
