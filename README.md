@@ -63,5 +63,8 @@ First run is open; press New key once and the server + dashboard lock to it.
   (opencode included).
 - Same 3-layer resilience, keep-alive pool, opt-in cache, trim, webhooks.
 
+- **Fetch live list**: the Add form asks the company itself what models it serves
+  right now, so you use their names, not a stale catalog.
+
 ## Tests
 `python3 -m unittest` (41 tests, stdlib only).
