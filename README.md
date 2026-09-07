@@ -55,6 +55,10 @@ First run is open; press New key once and the server + dashboard lock to it.
 - **245 providers, 1213 models** in the Providers tab, generated from the main
   OmniRoute registry (`python3 /tmp/gen_catalog.py` to refresh). FREE tags come
   from its hand-curated free-tier catalog. Search to find anything.
+- **Web cookies**: cookie-auth providers are flagged; the Add form has Cookies and
+  Extra-headers boxes, and the key box tells you when a cookie goes there.
+- **Ollama is optional**: the preset points at your laptop, but the Address box takes
+  any remote OpenAI-compatible server. Nothing must be installed locally.
 - **Web cookies**: cookie-auth providers are flagged; paste the browser cookie
   as the key, or add extra `cookies` / `headers` per API (keys.toml or dashboard).
 - **Click around**: every model button Tests that model; Chat tab streams full
