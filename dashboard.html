@@ -56,7 +56,8 @@
   <label>Name</label><input id="f-name" placeholder="groq">
   <label>Address</label><input id="f-base" placeholder="https://…">
   <label>Key</label><input id="f-key" placeholder="paste key, or - for none">
-  <label>Models (comma apart)</label><input id="f-models" placeholder="llama-3.3-70b-versatile">
+  <label>Models (comma apart)</label>
+  <div class="row"><button id="f-fetch" style="flex:1">Fetch live list</button></div><input id="f-models" placeholder="llama-3.3-70b-versatile">
   <button class="primary" id="f-add" style="width:100%">Add</button>
   <h3>Chains</h3>
   <div class="muted">Try APIs in order until one works. Use as model <b>chain:name</b>.</div>
@@ -222,6 +223,19 @@ async function loadApis() {
       document.getElementById('f-name').value = p.provider.split(' ')[0].toLowerCase(); };
   }
 }
+document.getElementById('f-fetch').onclick = async () => {
+  const b = document.getElementById('f-fetch');
+  b.disabled = true; b.textContent = 'Asking…';
+  const p = PRESETS[document.getElementById('f-preset').value];
+  const res = await api('POST', '/admin/discover', {
+    kind: p ? p.kind : 'openai',
+    base_url: document.getElementById('f-base').value.trim(),
+    api_key: document.getElementById('f-key').value.trim() || '-'});
+  b.disabled = false; b.textContent = 'Fetch live list';
+  if (res.error) { alert(res.error.message); return; }
+  if (!res.models.length) { alert('Company lists nothing. Type the names.'); return; }
+  document.getElementById('f-models').value = res.models.join(', ');
+};
 document.getElementById('f-add').onclick = async () => {
   const t = {name: document.getElementById('f-name').value.trim(),
     base_url: document.getElementById('f-base').value.trim(),

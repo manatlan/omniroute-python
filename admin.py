@@ -187,6 +187,18 @@ def handle(h, method):
                 continue
         h._send(200, {"logs": out})
         return True
+    if parts[0] == "discover" and method == "POST" and len(parts) == 1:
+        body, err = h._body()
+        if err:
+            h._send(400, {"error": {"message": "bad json"}})
+            return True
+        b = body or {}
+        ids, derr = providers.discover_models(b.get("kind", "openai"), b.get("base_url", ""), b.get("api_key", "-"))
+        if derr:
+            h._send(502, {"error": {"message": derr}})
+            return True
+        h._send(200, {"models": ids})
+        return True
     if parts[0] == "models" and method == "GET" and len(parts) == 1:
         h._send(200, {"models": configured_model_map()})
         return True

@@ -291,3 +291,51 @@ class TProbeShape(unittest.TestCase):
             _p._call_raw = old_raw
             if old_key is not None:
                 os.environ["LITE_KEY"] = old_key
+
+
+class TDiscover(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from http.server import BaseHTTPRequestHandler
+
+        class ListUp(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                out = b'{"data":[{"id":"live-a"},{"id":"live-b"}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        cls.up = ThreadingHTTPServer(("127.0.0.1", 0), ListUp)
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.up.serve_forever, daemon=True).start()
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.up.shutdown()
+        cls.srv.shutdown()
+
+    def test_live_ids(self):
+        base = f"http://127.0.0.1:{self.up.server_address[1]}/v1"
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", "/admin/discover",
+                  json.dumps({"kind": "openai", "base_url": base, "api_key": "-"}),
+                  {"Content-Type": "application/json"})
+        r = c.getresponse()
+        self.assertEqual(json.loads(r.read()), {"models": ["live-a", "live-b"]})
+
+    def test_no_list_api(self):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", "/admin/discover",
+                  json.dumps({"kind": "anthropic", "base_url": "https://x", "api_key": "k"}),
+                  {"Content-Type": "application/json"})
+        r = c.getresponse()
+        self.assertEqual(r.status, 502)

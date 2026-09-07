@@ -76,6 +76,69 @@ def t_headers(t, base):
     return h
 
 
+def get(url, headers, timeout=15, max_body=MAX_BODY):
+    # same pool as post, GET flavor. Never raises.
+    sp = urllib.parse.urlsplit(url)
+    scheme, host = sp.scheme, sp.hostname
+    if not host:
+        return 502, {}, b'{"error":{"message":"bad url"}}'
+    port = sp.port or (443 if scheme == "https" else 80)
+    path = sp.path or "/"
+    if sp.query:
+        path += "?" + sp.query
+    conn = _take(scheme, host, port, timeout)
+    try:
+        conn.request("GET", path, headers=headers)
+        r = conn.getresponse()
+        h = {k.lower(): v for k, v in r.getheaders()}
+        data = r.read(max_body + 1)
+        if len(data) > max_body:
+            conn.close()
+            return 502, {}, b'{"error":{"message":"upstream body too large"}}'
+        if r.will_close:
+            conn.close()
+        else:
+            _give(scheme, host, port, conn)
+        return r.status, h, data
+    except (OSError, http.client.HTTPException):
+        try:
+            conn.close()
+        except OSError:
+            pass
+        return 503, {}, b'{"error":{"message":"upstream unreachable"}}'
+
+
+def discover_models(kind, base_url, api_key, timeout=15):
+    # ask the company what it serves right now. -> (ids|None, err|None)
+    import json as _j
+    base = (base_url or "").rstrip("/")
+    if not base.startswith(("https://", "http://")):
+        return None, "bad url"
+    auth = {"Authorization": f"Bearer {api_key}"} if api_key and api_key != "-" else {}
+    if kind in ("openai", "ollama"):
+        code, _, body = get(base + "/v1/models", auth, timeout)
+    elif kind == "azure":
+        code, _, body = get(base + "/openai/models?api-version=2024-06-01", {"api-key": api_key or ""}, timeout)
+    elif kind == "gemini":
+        code, _, body = get(base + "/v1beta/models", {"x-goog-api-key": api_key or ""}, timeout)
+    else:
+        return None, "no list API for this kind; type the names"
+    if code != 200:
+        return None, "http " + str(code)
+    try:
+        d = _j.loads(body)
+    except ValueError:
+        return None, "bad shape"
+    try:
+        if kind == "gemini":
+            ids = [m["name"].split("/")[-1] for m in d.get("models", []) if m.get("name")]
+        else:
+            ids = [m["id"] for m in d.get("data", []) if m.get("id")]
+    except (AttributeError, TypeError):
+        return None, "bad shape"
+    return ids[:200], None
+
+
 def forward(base_url, api_key, path, payload, timeout=30, extra=None):
     url = base_url.rstrip("/") + path
     auth = {"Authorization": f"Bearer {api_key}"} if api_key and api_key != "-" else {}

@@ -17,6 +17,7 @@ ROUTES = {
     ("POST", "/v1/chat/completions"),
     ("GET", "/admin/chains"), ("POST", "/admin/chains"), ("DELETE", "/admin/chains/*"),
     ("POST", "/v1/test/call"), ("GET", "/admin/logs?limit=100"),
+    ("POST", "/admin/discover"),
     ("DELETE", "/admin/targets/*"), ("DELETE", "/admin/webhooks/*"),
 }
 
