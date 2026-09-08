@@ -238,3 +238,15 @@ class TAudit(unittest.TestCase):
             {"base_url": "http://127.0.0.1:1", "api_key": "-"}, {"model": "m", "input": "hi"})
         # unreachable stays 503 (gate only rewrites 200s); shape covered below
         self.assertEqual(code, 503)
+
+
+class TPoolCap(unittest.TestCase):
+    def test_pool_bounded(self):
+        import http.client
+        providers._pool.clear()
+        try:
+            for _ in range(10):
+                providers._give("http", "h", 80, http.client.HTTPConnection("h", 80))
+            self.assertLessEqual(len(providers._pool[("http", "h", 80)]), 4)
+        finally:
+            providers._pool.clear()

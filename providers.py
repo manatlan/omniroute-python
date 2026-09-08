@@ -36,8 +36,16 @@ def _close(conn):
 
 
 def _give(scheme, host, port, conn):
+    # capped: extra idle conns are closed, not hoarded (fd ceiling).
     with _plock:
-        _pool.setdefault((scheme, host, port), []).append(conn)
+        lst = _pool.setdefault((scheme, host, port), [])
+        if len(lst) >= 4:
+            try:
+                conn.close()
+            except OSError:
+                pass
+            return
+        lst.append(conn)
 
 
 def post(url, headers, body, timeout=30, max_body=MAX_BODY):
