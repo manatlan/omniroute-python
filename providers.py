@@ -163,7 +163,7 @@ def valid_chat(body):
         if not ch:
             return False
         msg = ch[0].get("message", {})
-        return isinstance(msg, dict) and (isinstance(msg.get("content"), str) or isinstance(msg.get("tool_calls"), list))
+        return isinstance(msg, dict) and (isinstance(msg.get("content"), (str, list)) or isinstance(msg.get("tool_calls"), list))
     except (ValueError, AttributeError, IndexError, TypeError):
         return False
 
@@ -181,7 +181,7 @@ def probe_ok(body):
 def to_anthropic(payload):
     """OpenAI chat -> Anthropic messages. ponytail: text-only, images when proven needed."""
     system = "\n".join(m.get("content", "") for m in payload.get("messages", []) if m.get("role") == "system")
-    msgs = [{"role": m["role"], "content": m.get("content", "")} for m in payload.get("messages", []) if m.get("role") in ("user", "assistant")]
+    msgs = [{"role": m["role"], "content": m.get("content") or ""} for m in payload.get("messages", []) if m.get("role") in ("user", "assistant")]
     body = {"model": payload.get("model", ""), "max_tokens": payload.get("max_tokens", 1024), "messages": msgs}
     if system:
         body["system"] = system

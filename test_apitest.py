@@ -36,7 +36,7 @@ class T(unittest.TestCase):
         store.load_targets = lambda *a: []
         try:
             c = HTTPConnection("127.0.0.1", self.port, timeout=5)
-            c.request("POST", "/v1/test/call", "{}", {"Content-Type": "application/json"})
+            c.request("POST", "/v1/test/call", json.dumps({"model": "m"}), {"Content-Type": "application/json"})
             self.assertEqual(c.getresponse().status, 503)
         finally:
             store.load_targets = o

@@ -16,3 +16,12 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TNone(unittest.TestCase):
+    def test_none_content_never_crashes(self):
+        msgs = [{"role": "user", "content": None},
+                {"role": "assistant", "content": None, "tool_calls": [{"id": "1"}]},
+                {"role": "user", "content": "hi"}]
+        out = trim(msgs)
+        self.assertEqual(len(out), 3)

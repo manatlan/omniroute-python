@@ -219,7 +219,9 @@ async function loadApis() {
   if (!sel.options.length) {
     PRESETS = (await api('GET', '/admin/presets')).presets;
     sel.append(new Option('Blank', ''));
-    PRESETS.forEach((p, i) => sel.append(new Option(p.provider + (p.free ? ' — FREE' : ''), i)));
+    PRESETS.map((p, i) => [p, i]).sort((a, b) =>
+      ((b[0].lite && b[0].free) - (a[0].lite && a[0].free)) || (a[0].provider < b[0].provider ? -1 : 1)
+    ).forEach(([p, i]) => sel.append(new Option(p.provider + (p.free ? ' — FREE' : ''), i)));
     sel.onchange = () => { const p = PRESETS[sel.value]; if (!p) return;
       document.getElementById('f-base').value = p.base_url;
       document.getElementById('f-models').value = p.models.map(m => m.id).join(', ');

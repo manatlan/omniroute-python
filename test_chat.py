@@ -315,3 +315,72 @@ class TBadShape(unittest.TestCase):
             self.assertEqual(seen, ["web", "real"])
         finally:
             _s.load_targets, _s.load_chains, _p._call_raw = o
+
+
+class TRobust(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        router._reset()
+
+    def _post(self, path, payload):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
+        r = c.getresponse()
+        return r.status, r.read()
+
+    def test_null_model_400_not_crash(self):
+        code, _ = self._post("/v1/chat/completions", {"model": None, "messages": []})
+        self.assertEqual(code, 400)
+
+    def test_missing_model_400(self):
+        code, _ = self._post("/v1/chat/completions", {"messages": []})
+        self.assertEqual(code, 400)
+
+    def test_chain_embeddings_rejected(self):
+        import store as _s
+        o = _s.load_targets
+        _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://x/v1", "api_key": "k", "models": ["m"]}]
+        try:
+            code, body = self._post("/v1/embeddings", {"model": "chain:x", "input": "hi"})
+            self.assertEqual(code, 400)
+            self.assertIn("chain", body.decode())
+        finally:
+            _s.load_targets = o
+
+    def test_vision_content_passes_gate(self):
+        import providers as _p
+        body = b'{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}]}'
+        self.assertTrue(_p.valid_chat(body))
+
+    def test_cache_hit_counted(self):
+        import store as _s, providers as _p, stats as _st, tempfile, os
+        tmp = os.path.join(tempfile.mkdtemp(), "c.db")
+        orig_home = os.path.expanduser
+        os.path.expanduser = lambda p: tmp if p == "~" else orig_home(p)
+        _st.reset()
+        calls = []
+        o_call, o_load = _p.call_target, _s.load_targets
+        _p.call_target = lambda t, p, timeout=30: (calls.append(1) or (200, {}, b'{"choices":[{"message":{"content":"v"}}]}'))
+        _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://x/v1", "api_key": "k", "models": ["m"]}]
+        try:
+            payload = {"model": "m", "messages": [{"role": "user", "content": "hi"}], "cache_ttl": 60}
+            for _ in range(2):
+                c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+                c.request("POST", "/v1/chat/completions", json.dumps(payload), {"Content-Type": "application/json"})
+                self.assertEqual(c.getresponse().status, 200)
+            s = _st.snap()
+            self.assertEqual(s["req"], 2)  # hits count too
+            self.assertIn("cache", s["by_target"])
+        finally:
+            os.path.expanduser = orig_home
+            _p.call_target, _s.load_targets = o_call, o_load

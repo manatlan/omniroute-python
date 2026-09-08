@@ -15,6 +15,12 @@ import time as _time
 
 START = _time.time()
 
+try:
+    with open("dashboard.html", "rb") as _f:
+        DASH = _f.read()
+except OSError:
+    DASH = b"<pre>omniroute-lite ok</pre>"
+
 
 def _classify(t, model, code, hdrs):
     return router.classify(t, model, code, hdrs)
@@ -119,16 +125,11 @@ class Handler(BaseHTTPRequestHandler):
             data += [{"id": "chain:" + c["name"], "object": "model"} for c in store.load_chains()]
             return self._send(200, {"object": "list", "data": data})
         if self.path == "/":
-            try:
-                with open("dashboard.html", "rb") as f:
-                    dash = f.read()
-            except OSError:
-                dash = b"<pre>omniroute-lite ok</pre>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(dash)))
+            self.send_header("Content-Length", str(len(DASH)))
             self.end_headers()
-            return self.wfile.write(dash)
+            return self.wfile.write(DASH)
         return self._send(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
@@ -146,12 +147,16 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(payload.get("messages"), list):
                 payload["messages"] = compress.trim(payload["messages"])
             import hashlib as _h, os as _o
-            model = payload.get("model", "")
+            model = payload.get("model") or ""
+            if not model:
+                return self._send(400, {"error": {"message": "model required"}})
             ckey = _h.sha256(_j.dumps(payload, sort_keys=True).encode()).hexdigest() if not payload.get("stream") and payload.get("cache_ttl") else None
             if ckey:
                 cpath = _o.path.join(_o.path.expanduser("~"), ".omniroute-lite", "cache.db")
                 hit = store.cache_get(cpath, ckey)
                 if hit:
+                    stats.note("cache", True, 0)
+                    _log("chat", "cache", model, 200, 0)
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(hit)))
@@ -233,7 +238,11 @@ class Handler(BaseHTTPRequestHandler):
             payload, err = self._body()
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
-            model = payload.get("model", "")
+            model = payload.get("model") or ""
+            if not model:
+                return self._send(400, {"error": {"message": "model required"}})
+            if model.startswith("chain:"):
+                return self._send(400, {"error": {"message": "chains are chat-only"}})
             targets = [t for t in router.chain(store.load_targets(), model) if t.get("kind", "openai") != "anthropic"]
             if not targets:
                 return self._send(400, {"error": {"message": "no embedding-capable target"}})
@@ -268,7 +277,9 @@ class Handler(BaseHTTPRequestHandler):
             payload, err = self._body()
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
-            model = payload.get("model", "")
+            model = payload.get("model") or ""
+            if not model:
+                return self._send(400, {"error": {"message": "model required"}})
             targets, cerr = _resolve(model)
             if cerr:
                 return self._send(404, {"error": {"message": cerr}})
