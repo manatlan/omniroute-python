@@ -150,7 +150,11 @@ class Handler(BaseHTTPRequestHandler):
             model = payload.get("model") or ""
             if not model:
                 return self._send(400, {"error": {"message": "model required"}})
-            ckey = _h.sha256(_j.dumps(payload, sort_keys=True).encode()).hexdigest() if not payload.get("stream") and payload.get("cache_ttl") else None
+            try:
+                ttl = int(payload.get("cache_ttl", 300)) if payload.get("cache_ttl") else 0
+            except (ValueError, TypeError):
+                return self._send(400, {"error": {"message": "bad cache_ttl"}})
+            ckey = _h.sha256(_j.dumps(payload, sort_keys=True).encode()).hexdigest() if not payload.get("stream") and ttl else None
             if ckey:
                 cpath = _o.path.join(_o.path.expanduser("~"), ".omniroute-lite", "cache.db")
                 hit = store.cache_get(cpath, ckey)
@@ -190,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
                                 self.wfile.write(b)
                         except (BrokenPipeError, ConnectionResetError):
                             pass
+                        except Exception:
+                            pass  # ponytail: truncated stream beats dead conn; client sees partial + close
                         return
                     code, body = scode, chunks
                 else:
@@ -215,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.end_headers()
                         return self.wfile.write(sse)
                     if ckey and code == 200:
-                        store.cache_set(cpath, ckey, body, ttl=int(payload.get("cache_ttl", 300)))
+                        store.cache_set(cpath, ckey, body, ttl=ttl)
                     self.send_response(code)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(body)))

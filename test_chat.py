@@ -384,3 +384,30 @@ class TRobust(unittest.TestCase):
         finally:
             os.path.expanduser = orig_home
             _p.call_target, _s.load_targets = o_call, o_load
+
+
+class TCacheTtl(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_garbage_ttl_400_not_hang(self):
+        import store as _s, providers as _p
+        o = (_s.load_targets, _p.call_target)
+        _s.load_targets = lambda *a: [{"name": "u", "base_url": "http://x/v1", "api_key": "k", "models": ["m"]}]
+        _p.call_target = lambda t, p, timeout=30: (200, {}, b'{"choices":[{"message":{"content":"v"}}]}')
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions",
+                      json.dumps({"model": "m", "messages": [], "cache_ttl": "abc"}),
+                      {"Content-Type": "application/json"})
+            self.assertEqual(c.getresponse().status, 400)
+        finally:
+            _s.load_targets, _p.call_target = o

@@ -71,6 +71,11 @@ def post(url, headers, body, timeout=30, max_body=MAX_BODY):
             else:
                 _give(scheme, host, port, conn)
             return r.status, h, data
+        except TimeoutError:
+            _close(conn)
+            if reused and _try == 0:
+                continue  # idle death mid-read; one fresh retry
+            return 504, {}, b'{"error":{"message":"upstream timeout"}}'
         except (OSError, http.client.HTTPException):
             _close(conn)
             if reused and _try == 0:
@@ -117,6 +122,11 @@ def get(url, headers, timeout=15, max_body=MAX_BODY):
             else:
                 _give(scheme, host, port, conn)
             return r.status, h, data
+        except TimeoutError:
+            _close(conn)
+            if reused and _try == 0:
+                continue  # idle death mid-read; one fresh retry
+            return 504, {}, b'{"error":{"message":"upstream timeout"}}'
         except (OSError, http.client.HTTPException):
             _close(conn)
             if reused and _try == 0:
@@ -136,7 +146,9 @@ def discover_models(kind, base_url, api_key, timeout=15):
     elif kind == "azure":
         code, _, body = get(base + "/openai/models?api-version=2024-06-01", {"api-key": api_key or ""}, timeout)
     elif kind == "gemini":
-        code, _, body = get(base + "/v1beta/models", {"x-goog-api-key": api_key or ""}, timeout)
+        import urllib.parse as _up
+        code, _, body = get(base + "/v1beta/models?key=" + _up.quote(api_key or ""),
+                            {"x-goog-api-key": api_key or ""}, timeout)
     else:
         return None, "no list API for this kind; type the names"
     if code != 200:
@@ -296,6 +308,9 @@ def post_stream(url, headers, body, timeout=30, chunk=65536):
             finally:
                 _close(conn)
         return r.status, h, gen()
+    except TimeoutError:
+        _close(conn)
+        return 504, {}, b'{"error":{"message":"upstream timeout"}}'
     except (OSError, _hc.HTTPException):
         _close(conn)
         return 503, {}, b'{"error":{"message":"upstream unreachable"}}'

@@ -250,3 +250,31 @@ class TPoolCap(unittest.TestCase):
             self.assertLessEqual(len(providers._pool[("http", "h", 80)]), 4)
         finally:
             providers._pool.clear()
+
+
+class TTimeout(unittest.TestCase):
+    def test_slow_upstream_is_504(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        import time
+
+        class Slow(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(n)
+                time.sleep(5)
+
+            def log_message(self, *a):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            code, _, body = providers.post(f"http://127.0.0.1:{srv.server_address[1]}/v", {}, b"{}", timeout=1)
+            self.assertEqual(code, 504)
+            self.assertIn(b"timeout", body)
+        finally:
+            srv.shutdown()
+            srv.server_close()
