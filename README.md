@@ -7,7 +7,9 @@ Measured on this laptop: ~20 MB warm RSS, ~2.8 ms routing overhead per request
 10 MB reads, thread-per-request server.
 
 ## Add an API (no restart)
-Append a block to `keys.toml` (see commented examples in the file).
+Dashboard → Providers → Use, or append a block to `keys.toml`
+(`cp keys.toml.example keys.toml` on a fresh clone — `keys.toml` itself is
+git-ignored so keys never leak).
 `kind`: `openai` (default — Groq/Together/DeepSeek/xAI/Mistral/OpenRouter/…)
 | `ollama` | `anthropic` | `gemini` | `azure` (model = deployment name).
 
