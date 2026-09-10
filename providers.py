@@ -145,6 +145,16 @@ def discover_models(kind, base_url, api_key, timeout=15):
         code, _, body = get(base + "/v1/models", auth, timeout)
     elif kind == "azure":
         code, _, body = get(base + "/openai/models?api-version=2024-06-01", {"api-key": api_key or ""}, timeout)
+    elif kind == "qwen-web":
+        code, _, body = get(base + "/api/models",
+                            {"Authorization": f"Bearer {api_key}"} if api_key and api_key != "-" else {}, timeout)
+        if code == 200:
+            try:
+                ids = [m["id"] for m in _j.loads(body).get("data", [])
+                       if "t2t" in (((m.get("info") or {}).get("meta") or {}).get("chat_type") or "")]
+                return (ids[:200] or None), (None if ids else "no chat models")
+            except (ValueError, AttributeError, TypeError):
+                return None, "bad shape"
     elif kind == "gemini":
         import urllib.parse as _up
         code, _, body = get(base + "/v1beta/models?key=" + _up.quote(api_key or ""),
@@ -333,6 +343,119 @@ def _call_codex(t, payload, timeout=30):
     return 200, h, _j.dumps({"choices": [{"message": {"role": "assistant", "content": out}, "finish_reason": "stop"}]}).encode()
 
 
+QWEN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+
+
+def _qwen_midtoken(timeout=10):
+    # bx-umidtoken for WAF; best-effort (None = proceed without, WAF decides).
+    import re
+    try:
+        code, _, data = get("https://sg-wum.alibaba.com/w/wu.json", {}, timeout)
+        if code != 200:
+            return None
+        m = re.search(r"(?:umx\.wu|__fycb)\('([^']+)'\)", data.decode("utf-8", "replace"))
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def qwen_headers(t, mid=None):
+    import uuid as _u
+    h = {"User-Agent": QWEN_UA, "Accept": "*/*", "Accept-Language": "en-US,en;q=0.5",
+         "Origin": "https://chat.qwen.ai", "Referer": "https://chat.qwen.ai/",
+         "Content-Type": "application/json", "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors",
+         "Sec-Fetch-Site": "same-origin", "X-Requested-With": "XMLHttpRequest",
+         "source": "web", "version": "0.2.66", "X-Accel-Buffering": "no",
+         "x-request-id": str(_u.uuid4())}
+    key = (t.get("api_key") or "").strip()
+    if key and key != "-":
+        h["Authorization"] = "Bearer " + key
+        h["Cookie"] = "token=" + key
+    if mid:
+        h["bx-umidtoken"] = mid
+        h["bx-v"] = "2.5.36"
+    return t_headers(t, h)
+
+
+def qwen_text(body):
+    # SSE choices[].delta: answer phase content accumulated; think phase skipped.
+    import json as _j
+    raw = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else ""
+    text = []
+    for ev in raw.split("\n\n"):
+        line = next((ln for ln in ev.split("\n") if ln.startswith("data:")), "")
+        d = line[5:].strip()
+        if not d or d == "[DONE]":
+            continue
+        try:
+            o = _j.loads(d)
+        except ValueError:
+            continue
+        if o.get("error"):
+            e = o["error"]
+            return None, (e.get("details") or e.get("code") or "qwen error") if isinstance(e, dict) else str(e)
+        for ch in o.get("choices", []) or []:
+            delta = ch.get("delta") or {}
+            if delta.get("phase") == "answer" and isinstance(delta.get("content"), str):
+                text.append(delta["content"])
+            elif not delta.get("phase") and isinstance(delta.get("content"), str):
+                text.append(delta["content"])
+    out = "".join(text)
+    return (out, None) if out else (None, "empty reply")
+
+
+def _call_qwen(t, payload, timeout=30):
+    # chat.qwen.ai v2 flow: chats/new -> completions?chat_id= (single-shot, fresh chat).
+    import json as _j
+    import time as _t
+    import uuid as _u
+    base = (t.get("base_url") or "https://chat.qwen.ai").rstrip("/")
+    model = payload.get("model", "")
+    user_text, system = "", ""
+    for m in payload.get("messages", []) or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        s = c if isinstance(c, str) else ""
+        if m.get("role") == "system" and s:
+            system += s
+        elif m.get("role") == "user" and s:
+            user_text = s
+    prompt = ((system + "\n\n" + user_text) if system else user_text).strip()
+    if not prompt:
+        return 400, {}, b'{"error":{"message":"empty prompt"}}'
+    mid = _qwen_midtoken()
+    h = qwen_headers(t, mid)
+    now = int(_t.time() * 1000)
+    code, _, data = post(base + "/api/v2/chats/new",
+                         dict(h, Referer="https://chat.qwen.ai/"),
+                         _j.dumps({"title": "New Chat", "models": [model], "chat_mode": "normal",
+                                   "chat_type": "t2t", "timestamp": now, "project_id": ""}).encode(), timeout)
+    if code == 401:
+        return 401, {}, b'{"error":{"message":"qwen token expired"}}'
+    if code != 200:
+        return code, {}, data
+    try:
+        chat_id = _j.loads(data)["data"]["id"]
+    except (ValueError, KeyError, TypeError):
+        return 502, {}, b'{"error":{"message":"qwen: no chat id"}}'
+    fid = str(_u.uuid4())
+    msg = {"fid": fid, "parentId": None, "childrenIds": [], "role": "user", "content": prompt,
+           "user_action": "chat", "files": [], "timestamp": now, "models": [model], "chat_type": "t2t",
+           "feature_config": {"thinking_enabled": False, "output_schema": "phase", "thinking_budget": 81920},
+           "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t"}
+    req = {"stream": True, "version": "2.1", "incremental_output": True, "chat_id": chat_id,
+           "chat_mode": "normal", "model": model, "parent_id": None, "messages": [msg], "timestamp": now}
+    code, hdrs, sdata = post_stream(base + "/api/v2/chat/completions?chat_id=" + chat_id, h,
+                                    _j.dumps(req).encode(), timeout)
+    if code != 200:
+        return code, hdrs, sdata
+    out, err = qwen_text(b"".join(sdata))
+    if err:
+        return 502, hdrs, ('{"error":{"message":"qwen: %s"}}' % err).encode()
+    return 200, hdrs, _j.dumps({"choices": [{"message": {"role": "assistant", "content": out}, "finish_reason": "stop"}]}).encode()
+
+
 def _call_grok(t, payload, timeout=30):
     # grok.com cookie flow (mirrors open-sse/executors/grok-web.ts minus TLS impersonation).
     import json as _j
@@ -410,6 +533,8 @@ def _call_raw(t, payload, timeout=30):
     kind = t.get("kind", "openai")
     if kind == "grok-web":
         return _call_grok(t, payload, timeout)
+    if kind == "qwen-web":
+        return _call_qwen(t, payload, timeout)
     if kind == "claude-oauth":
         return _call_claude_oauth(t, payload, timeout)
     if kind == "codex-oauth":

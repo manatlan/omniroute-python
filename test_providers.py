@@ -551,3 +551,85 @@ class TCodexChat(unittest.TestCase):
             providers.post_stream = orig_stream
             os.path.expanduser = oexp
             srv.shutdown()
+
+
+class TQwen(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        seen = {}
+        cls.seen = seen
+
+        class FakeQwen(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def _send(self, obj, ctype="application/json"):
+                body = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                seen["auth"] = self.headers.get("Authorization")
+                seen["mid"] = self.headers.get("bx-umidtoken")
+                if self.path.endswith("/api/v2/chats/new"):
+                    seen["models"] = body.get("models")
+                    return self._send({"success": True, "data": {"id": "chat9"}})
+                if "/api/v2/chat/completions" in self.path:
+                    seen["qwen_model"] = body.get("model")
+                    seen["qwen_msg"] = body["messages"][0]["content"]
+                    seen["ver"] = body.get("version")
+                    out = (b'data: {"choices":[{"delta":{"phase":"think","content":"hmm"}}]}\n\n'
+                           b'data: {"choices":[{"delta":{"phase":"answer","content":"nihao"}}]}\n\n')
+                    return self._send(out, "text/event-stream")
+                return self._send({"success": False}, "text/plain")
+
+            def do_GET(self):
+                if self.path.endswith("/api/models"):
+                    return self._send({"data": [{"id": "qwen3.5-plus",
+                                                 "info": {"meta": {"chat_type": "t2t"}}},
+                                                {"id": "img-only",
+                                                 "info": {"meta": {"chat_type": "t2i"}}}]})
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeQwen)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_flow(self):
+        base = f"http://127.0.0.1:{self.port}"
+        orig_mid = providers._qwen_midtoken
+        providers._qwen_midtoken = lambda timeout=10: "mid123"
+        try:
+            code, _, body = providers.call_target(
+                {"kind": "qwen-web", "base_url": base, "api_key": "tok123",
+                 "models": ["qwen3.5-plus"]},
+                {"model": "qwen3.5-plus", "messages": [{"role": "user", "content": "hi"}]})
+            self.assertEqual(code, 200)
+            self.assertIn("nihao", json.loads(body)["choices"][0]["message"]["content"])
+            self.assertEqual(self.seen["auth"], "Bearer tok123")
+            self.assertEqual(self.seen["mid"], "mid123")
+            self.assertEqual(self.seen["models"], ["qwen3.5-plus"])
+            self.assertEqual(self.seen["qwen_model"], "qwen3.5-plus")
+            self.assertEqual(self.seen["qwen_msg"], "hi")
+            self.assertEqual(self.seen["ver"], "2.1")
+        finally:
+            providers._qwen_midtoken = orig_mid
+
+    def test_discover_filters_t2t(self):
+        base = f"http://127.0.0.1:{self.port}"
+        ids, err = providers.discover_models("qwen-web", base, "tok123")
+        self.assertEqual((ids, err), (["qwen3.5-plus"], None))
