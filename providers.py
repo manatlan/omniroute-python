@@ -243,9 +243,85 @@ def from_gemini(body):
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}
 
 
+def _call_grok(t, payload, timeout=30):
+    # grok.com cookie flow (mirrors open-sse/executors/grok-web.ts minus TLS impersonation).
+    import json as _j
+    import uuid as _u
+    cookie = grok_cookie(t.get("api_key", "")) or t.get("cookies", "")
+    if not cookie:
+        return 401, {}, b'{"error":{"message":"grok sso cookie missing"}}'
+    mode = GROK_MODES.get(payload.get("model", ""), "fast")
+    text = web_transcript(payload.get("messages", []))
+    if not text.strip():
+        return 400, {}, b'{"error":{"message":"empty prompt"}}'
+    body = _j.dumps({"temporary": True, "modeId": mode, "message": text, "fileAttachments": [],
+                     "imageAttachments": [], "disableSearch": False, "toolOverrides": {},
+                     "isReasoning": False, "disableMemory": True, "sendFinalMetadata": True}).encode()
+    h = t_headers(t, {"Origin": "https://grok.com", "Referer": "https://grok.com/",
+                      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+                      "x-xai-request-id": str(_u.uuid4()), "Cookie": cookie})
+    code, hdrs, data = post("https://grok.com/rest/app-chat/conversations/new", h, body, timeout)
+    if code == 401:
+        return 401, hdrs, b'{"error":{"message":"grok sso cookie expired"}}'
+    if code != 200:
+        return code, hdrs, data
+    out, err = grok_text(data)
+    if err:
+        return 502, hdrs, ('{"error":{"message":"grok: %s"}}' % err).encode()
+    return 200, hdrs, _j.dumps({"choices": [{"message": {"role": "assistant", "content": out}, "finish_reason": "stop"}]}).encode()
+
+
+def _call_claude(t, payload, timeout=30):
+    # claude.ai cookie flow: organizations -> fresh conversation completion (SSE).
+    import json as _j
+    import urllib.parse as _up
+    import uuid as _u
+    cookie = claude_cookie(t.get("api_key", "")) or t.get("cookies", "")
+    if not cookie:
+        return 401, {}, b'{"error":{"message":"claude sessionKey cookie missing"}}'
+    h = t_headers(t, {"Origin": "https://claude.ai", "Referer": "https://claude.ai/new",
+                      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+                      "Accept": "text/event-stream", "anthropic-client-platform": "web_claude_ai",
+                      "Cookie": cookie})
+    code, _, org_body = get("https://claude.ai/api/organizations", h, timeout)
+    if code == 401:
+        return 401, {}, b'{"error":{"message":"claude sessionKey expired"}}'
+    if code != 200:
+        return code, {}, org_body
+    try:
+        orgs = _j.loads(org_body)
+        org = orgs[0].get("uuid") or orgs[0].get("id")
+    except (ValueError, IndexError, AttributeError, TypeError):
+        org = None
+    if not org:
+        return 502, {}, b'{"error":{"message":"claude: no organization"}}'
+    text = web_transcript(payload.get("messages", []))
+    if not text.strip():
+        return 400, {}, b'{"error":{"message":"empty prompt"}}'
+    model = payload.get("model", "")
+    body = _j.dumps({"prompt": text, "model": model, "timezone": "UTC", "locale": "en-US",
+                     "turn_message_uuids": {"human_message_uuid": str(_u.uuid4()),
+                                            "assistant_message_uuid": str(_u.uuid4())},
+                     "attachments": [], "files": [], "rendering_mode": "messages",
+                     "create_conversation_params": {"name": "", "model": model}}).encode()
+    url = ("https://claude.ai/api/organizations/" + _up.quote(org) + "/chat_conversations/"
+           + str(_u.uuid4()) + "/completion")
+    code, hdrs, data = post(url, h, body, timeout)
+    if code != 200:
+        return code, hdrs, data
+    out, err = claude_text(data)
+    if err:
+        return 502, hdrs, ('{"error":{"message":"claude: %s"}}' % err).encode()
+    return 200, hdrs, _j.dumps({"choices": [{"message": {"role": "assistant", "content": out}, "finish_reason": "stop"}]}).encode()
+
+
 def _call_raw(t, payload, timeout=30):
-    """kind-aware dispatch -> (status, headers, body). kinds: openai | ollama | anthropic | gemini | azure."""
+    """kind-aware dispatch -> (status, headers, body). kinds: openai | ollama | anthropic | gemini | azure | grok-web | claude-web."""
     kind = t.get("kind", "openai")
+    if kind == "grok-web":
+        return _call_grok(t, payload, timeout)
+    if kind == "claude-web":
+        return _call_claude(t, payload, timeout)
     if kind == "anthropic":
         code, h, body = post(t["base_url"].rstrip("/") + "/v1/messages",
             t_headers(t, {"x-api-key": t["api_key"], "anthropic-version": "2023-06-01"}),
@@ -370,6 +446,121 @@ def _gate_embed(code, h, body):
     if code == 200 and not valid_embed(body):
         return 502, h, b'{"error":{"message":"upstream bad shape"}}'
     return code, h, body
+
+
+GROK_MODES = {"fast": "fast", "expert": "expert", "heavy": "heavy",
+              "grok-420-computer-use-sa": "grok-420-computer-use-sa",
+              "grok-4": "fast", "grok-4.1-fast": "fast", "grok-4.1-expert": "expert",
+              "grok-4-heavy": "heavy", "grok-4.20": "expert", "grok-4.20-heavy": "heavy",
+              "grok-4.3": "grok-420-computer-use-sa"}
+# mode map mirrors open-sse/executors/grok-web.ts MODEL_MAP (UI modes, not public IDs)
+
+
+def _cookie_val(raw, name):
+    import re
+    m = re.search(r"(?:^|;\s*)" + re.escape(name) + r"\s*=\s*([^;]+)", raw or "")
+    return m.group(1).strip() if m else ""
+
+
+def grok_cookie(raw):
+    # bare value, sso= pair, or full DevTools blob -> minimal sso[; sso-rw][; cf] header
+    raw = (raw or "").strip()
+    sso = _cookie_val(raw, "sso") or (raw if raw and "=" not in raw and ";" not in raw else "")
+    if not sso:
+        return ""
+    parts = ["sso=" + sso]
+    for n in ("sso-rw", "cf_clearance", "__cf_bm"):
+        v = _cookie_val(raw, n)
+        if v:
+            parts.append(n + "=" + v)
+    return "; ".join(parts)
+
+
+def claude_cookie(raw):
+    # sessionKey pair, bare value, or full blob passthrough
+    raw = (raw or "").strip()
+    v = _cookie_val(raw, "sessionKey")
+    if v:
+        return "sessionKey=" + v
+    if raw and "=" not in raw and ";" not in raw:
+        return "sessionKey=" + raw
+    return raw
+
+
+def web_transcript(messages):
+    # plain-text transcript (mirrors buildPromptFromMessages: user/tool turns joined)
+    parts = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else ""
+        if text and m.get("role") in ("system", "user", "tool"):
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def grok_text(body):
+    # NDJSON result.response.token deltas; modelResponse.message wins when present.
+    # -> (text|None, err|None)
+    import json as _j
+    text, final = [], None
+    try:
+        lines = body.decode("utf-8", "replace").splitlines() if isinstance(body, (bytes, bytearray)) else []
+    except Exception:
+        return None, "unreadable"
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = _j.loads(line)
+        except ValueError:
+            continue
+        r = ((d.get("result") or {}).get("response") or {}) if isinstance(d, dict) else {}
+        if not isinstance(r, dict):
+            continue
+        if r.get("error"):
+            e = r["error"]
+            return None, e.get("message") if isinstance(e, dict) else str(e)
+        tok = r.get("token")
+        if isinstance(tok, str):
+            text.append(tok)
+        mr = r.get("modelResponse") or {}
+        if isinstance(mr.get("message"), str) and mr["message"]:
+            final = mr["message"]
+    out = final if final else "".join(text)
+    return (out, None) if out else (None, "empty reply")
+
+
+def claude_text(body):
+    # SSE content_block_delta text_delta aggregation.
+    import json as _j
+    raw = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else ""
+    text = []
+    for ev in raw.split("\n\n"):
+        line = next((ln for ln in ev.split("\n") if ln.startswith("data:")), "")
+        d = line[5:].strip()
+        if not d or d == "[DONE]":
+            continue
+        try:
+            o = _j.loads(d)
+        except ValueError:
+            continue
+        delta = o.get("delta") or {}
+        if delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+            text.append(delta["text"])
+    out = "".join(text)
+    return (out, None) if out else (None, "empty reply")
+
+
+def challenge_hint(code, body):
+    # Cloudflare/bot-wall fingerprint: honest reason instead of a bare 403.
+    if code == 403 and isinstance(body, (bytes, bytearray)):
+        low = body[:4000].lower()
+        if b"cloudflare" in low or b"just a moment" in low or b"attention required" in low:
+            return "blocked, needs browser"
+    return None
 
 
 def call_target(t, payload, timeout=30):

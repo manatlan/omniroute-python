@@ -278,3 +278,146 @@ class TTimeout(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+class TWeb(unittest.TestCase):
+    def test_grok_cookie_forms(self):
+        self.assertEqual(providers.grok_cookie("abc123"), "sso=abc123")
+        self.assertEqual(providers.grok_cookie("sso=abc123"), "sso=abc123")
+        self.assertEqual(providers.grok_cookie("x=1; sso=abc; sso-rw=rw2; y=3"),
+                         "sso=abc; sso-rw=rw2")
+        self.assertEqual(providers.grok_cookie(""), "")
+        self.assertEqual(providers.grok_cookie("a=b"), "")
+
+    def test_claude_cookie_forms(self):
+        self.assertEqual(providers.claude_cookie("k123"), "sessionKey=k123")
+        self.assertEqual(providers.claude_cookie("a=1; sessionKey=k9"), "sessionKey=k9")
+
+    def test_grok_modes(self):
+        self.assertEqual(providers.GROK_MODES.get("grok-4", "fast"), "fast")
+        self.assertEqual(providers.GROK_MODES.get("grok-4-heavy", "fast"), "heavy")
+        self.assertEqual(providers.GROK_MODES.get("whatever", "fast"), "fast")
+
+    def test_grok_ndjson(self):
+        body = (b'{"result":{"response":{"token":"Hel"}}}\n'
+                b'{"result":{"response":{"token":"lo"}}}\n'
+                b'{"result":{"response":{"modelResponse":{"message":"Hello"}}}}\n')
+        self.assertEqual(providers.grok_text(body), ("Hello", None))
+        body2 = b'{"result":{"response":{"token":"a"}}}\n{"result":{"response":{"token":"b"}}}\n'
+        self.assertEqual(providers.grok_text(body2), ("ab", None))
+        self.assertEqual(providers.grok_text(b'{"result":{"response":{"error":{"message":"quota"}}}}')[1], "quota")
+        self.assertEqual(providers.grok_text(b"<html>")[1], "empty reply")
+
+    def test_claude_sse(self):
+        body = (b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}\n\n'
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"!"}} \n\n'
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
+        self.assertEqual(providers.claude_text(body), ("Hi!", None))
+        self.assertEqual(providers.claude_text(b"nope")[1], "empty reply")
+
+    def test_challenge_hint(self):
+        self.assertEqual(providers.challenge_hint(403, b"<title>Just a moment...</title>"), "blocked, needs browser")
+        self.assertIsNone(providers.challenge_hint(403, b'{"error":"denied"}'))
+        self.assertIsNone(providers.challenge_hint(500, b"cloudflare"))
+
+    def test_grok_dispatch(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        seen = {}
+
+        class FakeGrok(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n))
+                seen["cookie"] = self.headers.get("Cookie")
+                seen["mode"] = body.get("modeId")
+                seen["msg"] = body.get("message")
+                out = b'{"result":{"response":{"token":"yo"}}}\n'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeGrok)
+        port = srv.server_address[1]
+        Thread(target=srv.serve_forever, daemon=True).start()
+        orig = providers.post
+        providers.post = lambda url, h, b, timeout=30: orig(
+            f"http://127.0.0.1:{port}/rest/app-chat/conversations/new", h, b, timeout)
+        try:
+            code, _, body = providers.call_target(
+                {"kind": "grok-web", "base_url": "https://grok.com", "api_key": "sso=abc",
+                 "models": ["fast"]},
+                {"model": "fast", "messages": [{"role": "user", "content": "hi"}]})
+            self.assertEqual(code, 200)
+            self.assertIn("yo", json.loads(body)["choices"][0]["message"]["content"])
+            self.assertIn("sso=abc", seen["cookie"])
+            self.assertEqual(seen["mode"], "fast")
+            self.assertIn("hi", seen["msg"])
+        finally:
+            providers.post = orig
+            srv.shutdown()
+
+    def test_claude_dispatch(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        seen = {}
+
+        class FakeClaude(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                out = b'[{"uuid":"org1"}]'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n))
+                seen["cookie"] = self.headers.get("Cookie")
+                seen["prompt"] = body.get("prompt")
+                seen["path"] = self.path
+                out = (b'event: content_block_delta\ndata: {"type":"content_block_delta",'
+                       b'"delta":{"type":"text_delta","text":"Bonjour"}}\n\n')
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeClaude)
+        port = srv.server_address[1]
+        Thread(target=srv.serve_forever, daemon=True).start()
+        orig_post, orig_get = providers.post, providers.get
+        def fake_post(url, h, b, timeout=30):
+            seen["url"] = url
+            return orig_post(f"http://127.0.0.1:{port}/x", h, b, timeout)
+        providers.post = fake_post
+        providers.get = lambda url, h, timeout=15, max_body=None: orig_get(
+            f"http://127.0.0.1:{port}/api/organizations", h, timeout)
+        try:
+            code, _, body = providers.call_target(
+                {"kind": "claude-web", "base_url": "https://claude.ai", "api_key": "sess999",
+                 "models": ["claude-sonnet-4-6"]},
+                {"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "salut"}]})
+            self.assertEqual(code, 200)
+            self.assertIn("Bonjour", json.loads(body)["choices"][0]["message"]["content"])
+            self.assertIn("sessionKey=sess999", seen["cookie"])
+            self.assertIn("salut", seen["prompt"])
+            self.assertIn("/org1/chat_conversations/", seen["url"])
+            self.assertTrue(seen["url"].endswith("/completion"))
+        finally:
+            providers.post, providers.get = orig_post, orig_get
+            srv.shutdown()
