@@ -346,7 +346,7 @@ class Handler(BaseHTTPRequestHandler):
             _log("test", t.get("name", ""), probe.get("model", ""), code, ms)
             out = {"ok": ok, "target": t.get("name"), "status": code, "latency_ms": ms}
             if not ok:
-                out["reason"] = "bad shape" if b"bad shape" in body else "http " + str(code)
+                out["reason"] = providers.challenge_hint(code, body) or ("bad shape" if b"bad shape" in body else "http " + str(code))
             return self._send(200 if ok else code, out)
         return self._send(404, {"error": {"message": "not found"}})
 

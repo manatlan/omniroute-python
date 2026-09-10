@@ -105,6 +105,8 @@ class T(unittest.TestCase):
             self.assertIn('id="%s"' % sec, body)
         for sec in ["s-chat"]:
             self.assertIn('id="%s"' % sec, body)
+        for bid in ["f-all", "f-free", "f-fetch", "f-add", "c-send", "q-reset", "k-copy", "k-new", "r-btn"]:
+            self.assertIn('id="%s"' % bid, body)
         for name in ["Home", "APIs", "Providers", "Chat", "Logs", "Quota", "Key", "Webhooks", "Restart"]:
             self.assertIn("'%s'" % name, body)
         self.assertNotIn("<img", body)

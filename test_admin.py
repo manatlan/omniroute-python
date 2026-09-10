@@ -371,3 +371,15 @@ class TPayloadType(unittest.TestCase):
             self.assertIn("error", json.loads(r.read()))
         finally:
             admin.TARGETS_PATH = old
+
+
+class TWebPresets(unittest.TestCase):
+    def test_grok_web_routable(self):
+        import admin as _a
+        grok = next(p for p in _a.catalog_presets() if p["provider"] == "grok-web")
+        self.assertTrue(grok["lite"])
+        self.assertEqual(grok["kind"], "grok-web")
+        self.assertTrue(any(m["id"] == "fast" for m in grok["models"]))
+        claude = next(p for p in _a.catalog_presets() if p["provider"] == "claude-web")
+        self.assertTrue(claude["lite"])
+        self.assertEqual(claude["auth"], "cookie")

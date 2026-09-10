@@ -59,6 +59,8 @@
     <option value="anthropic">anthropic</option>
     <option value="gemini">gemini</option>
     <option value="azure">azure</option>
+    <option value="grok-web">grok-web (cookie)</option>
+    <option value="claude-web">claude-web (cookie)</option>
   </select>
   <label>Name</label><input id="f-name" placeholder="groq">
   <label>Group (optional, shares outages)</label><input id="f-provider" placeholder="groq">
@@ -68,7 +70,8 @@
   <label>Extra headers (optional, JSON)</label><input id="f-headers" placeholder='{"X-Foo": "bar"}'>
   <label>Models (comma apart)</label>
   <label>Version (azure only)</label><input id="f-ver" placeholder="2024-06-01">
-  <div class="row"><button id="f-fetch" style="flex:1">Fetch live list</button></div><input id="f-models" placeholder="llama-3.3-70b-versatile">
+  <div class="row"><button id="f-fetch" style="flex:1">Fetch live list</button></div>
+  <div class="row"><button id="f-all" style="flex:1">All</button><button id="f-free" style="flex:1">Free only</button></div><input id="f-models" placeholder="llama-3.3-70b-versatile">
   <button class="primary" id="f-add" style="width:100%">Add</button>
   <h3>Chains</h3>
   <div class="muted">Try APIs in order until one works. Use as model <b>chain:name</b>.</div>
@@ -241,9 +244,11 @@ async function loadApis() {
       ((b[0].lite && b[0].free) - (a[0].lite && a[0].free)) || (a[0].provider < b[0].provider ? -1 : 1)
     ).forEach(([p, i]) => sel.append(new Option(p.provider + (p.free ? ' — FREE' : ''), i)));
     sel.onchange = () => { const p = PRESETS[sel.value]; if (!p) return;
+      const free = p.models.filter(m => m.free);
+      document.getElementById('f-models').value = (free.length ? free : p.models).map(m => m.id).join(', ');
       document.getElementById('f-kind').value = p.kind || 'openai';
       document.getElementById('f-base').value = p.base_url;
-      document.getElementById('f-models').value = p.models.map(m => m.id).join(', ');
+
       document.getElementById('f-name').value = p.provider.split(' ')[0].toLowerCase();
       document.getElementById('f-key').placeholder =
         p.auth === 'cookie' ? 'paste browser cookie here' : 'paste key, or - for none'; };
@@ -262,6 +267,15 @@ document.getElementById('f-fetch').onclick = async () => {
   if (!res.models.length) { alert('Company lists nothing. Type the names.'); return; }
   document.getElementById('f-models').value = res.models.join(', ');
 };
+function fillPresetModels(freeOnly) {
+  const p = PRESETS[document.getElementById('f-preset').value];
+  if (!p) { alert('Pick a provider first.'); return; }
+  const ms = p.models.filter(m => !freeOnly || m.free).map(m => m.id);
+  if (!ms.length) { alert('No free models listed — try Fetch live list.'); return; }
+  document.getElementById('f-models').value = ms.join(', ');
+}
+document.getElementById('f-all').onclick = () => fillPresetModels(false);
+document.getElementById('f-free').onclick = () => fillPresetModels(true);
 document.getElementById('f-add').onclick = async () => {
   const t = {name: document.getElementById('f-name').value.trim(),
     base_url: document.getElementById('f-base').value.trim(),

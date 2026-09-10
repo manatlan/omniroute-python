@@ -47,7 +47,7 @@ def targets_crud(method, parts, body):
         ms = int((time.time() - start) * 1000)
         ok = code not in router.FAILOVER and providers.probe_ok(body)
         shaped = b"bad shape" in body
-        reason = None if ok else ("bad shape" if shaped else "http " + str(code))
+        reason = None if ok else (providers.challenge_hint(code, body) or ("bad shape" if shaped else "http " + str(code)))
         if ok:
             router.note_success(name)
             router.note_provider_ok(t)
@@ -232,6 +232,18 @@ def handle(h, method):
         return True
 
 
+WEB_KINDS = {
+    "grok-web": ("grok-web", "Cookie from grok.com (sso value or full cookie string). "
+                              "Needs browser-grade TLS; the Test button is the judge."),
+    "claude-web": ("claude-web", "sessionKey cookie from claude.ai (paste as the key). "
+                                 "Needs browser-grade TLS; the Test button is the judge."),
+}
+
+SYNTHETIC_PRESETS = [
+    {"id": "claude-web", "format": "?", "kind": None, "base": "https://claude.ai",
+     "auth": "cookie", "free": False, "tos": "", "models": []},
+]
+
 AUTH_NOTE = {
     "cookie": "Needs a browser cookie — open the site, copy it, paste as the key.",
     "oauth": "Needs app login — not routable here yet.",
@@ -241,14 +253,20 @@ AUTH_NOTE = {
 
 def catalog_presets():
     out = []
-    for p in catalog.CATALOG:
-        note = AUTH_NOTE.get(p["auth"], "")
-        if not p["kind"] and not note:
-            note = "Special format — not routable here yet."
+    for p in list(catalog.CATALOG) + SYNTHETIC_PRESETS:
         http = p["base"].startswith(("https://", "http://"))
-        out.append({"provider": p["id"], "kind": p["kind"] if http else None, "base_url": p["base"],
+        web_kind, web_note = WEB_KINDS.get(p["id"], (None, ""))
+        if web_kind and http:
+            pkind, lite, note = web_kind, True, web_note
+        else:
+            pkind = p["kind"] if http else None
+            lite = http and bool(p["kind"]) and p["auth"] in ("key", "x-api-key", "api-key", "cookie", "none")
+            note = AUTH_NOTE.get(p["auth"], "")
+            if not p["kind"] and not note:
+                note = "Special format — not routable here yet."
+        out.append({"provider": p["id"], "kind": pkind, "base_url": p["base"],
                     "auth": p["auth"], "free": p["free"], "tos": p["tos"], "note": note,
-                    "lite": http and bool(p["kind"]) and p["auth"] in ("key", "x-api-key", "api-key", "cookie", "none"),
+                    "lite": lite,
                     "models": [{"id": m["id"], "name": m["name"], "free": m["free"]} for m in p["models"]]})
     return out
 
