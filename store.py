@@ -114,7 +114,8 @@ def validate_target(t):
     if not t.get("name") or not t.get("base_url"):
         return "name and base_url required"
     if t.get("kind", "openai") not in ("openai", "ollama", "anthropic", "gemini", "azure",
-                                          "grok-web", "claude-web", "claude-oauth", "codex-oauth"):
+                                          "grok-web", "claude-web", "claude-oauth", "codex-oauth",
+                                          "qwen-web"):
         return "unknown kind"
     if not isinstance(t.get("models", []), list):
         return "models must be a list"

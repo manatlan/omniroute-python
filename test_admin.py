@@ -462,3 +462,19 @@ class TOAuthFlow(unittest.TestCase):
         self._add("o", "openai")
         code, out = self.req("POST", "/admin/oauth/claude_start", {"target": "o"})
         self.assertEqual(code, 400)
+
+
+class TWebKinds(unittest.TestCase):
+    def test_qwen_preset_routable(self):
+        import admin as _a
+        q = next(p for p in _a.catalog_presets() if p["provider"] == "qwen-web")
+        self.assertTrue(q["lite"])
+        self.assertEqual(q["kind"], "qwen-web")
+        self.assertGreater(len(q["models"]), 3)
+
+    def test_oauth_presets_routable(self):
+        import admin as _a
+        by_id = {p["provider"]: p for p in _a.catalog_presets()}
+        for pid, kind in (("claude-oauth", "claude-oauth"), ("codex-oauth", "codex-oauth")):
+            self.assertTrue(by_id[pid]["lite"], pid)
+            self.assertEqual(by_id[pid]["kind"], kind)

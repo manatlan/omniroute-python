@@ -313,11 +313,20 @@ WEB_KINDS = {
                               "Needs browser-grade TLS; the Test button is the judge."),
     "claude-web": ("claude-web", "sessionKey cookie from claude.ai (paste as the key). "
                                  "Needs browser-grade TLS; the Test button is the judge."),
+    "qwen-web": ("qwen-web", "JWT from chat.qwen.ai localStorage (token value), or blank for anonymous limits."),
 }
 
 SYNTHETIC_PRESETS = [
     {"id": "claude-web", "format": "?", "kind": None, "base": "https://claude.ai",
      "auth": "cookie", "free": False, "tos": "", "models": []},
+    {"id": "qwen-web", "format": "?", "kind": None, "base": "https://chat.qwen.ai",
+     "auth": "key", "free": True, "tos": "",
+     "models": [{"id": "qwen3.5-plus", "name": "Qwen 3.5 Plus", "free": True},
+                {"id": "qwen3.6-plus", "name": "Qwen 3.6 Plus", "free": True},
+                {"id": "qwen3.5-max-2026-03-08", "name": "Qwen 3.5 Max", "free": True},
+                {"id": "qwen3-max-2026-01-23", "name": "Qwen 3 Max", "free": True},
+                {"id": "qwen3-coder-plus", "name": "Qwen 3 Coder Plus", "free": True},
+                {"id": "qwen3-vl-plus", "name": "Qwen 3 VL Plus", "free": True}]},
     {"id": "claude-oauth", "format": "anthropic", "kind": None, "base": "https://api.anthropic.com",
      "auth": "oauth", "free": False, "tos": "",
      "models": [{"id": "claude-sonnet-4-6", "name": "Sonnet (subscription)", "free": False},
