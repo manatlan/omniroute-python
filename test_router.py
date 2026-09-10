@@ -79,3 +79,13 @@ class TResilience(unittest.TestCase):
         router.lock_model("a", "x", 60)
         self.assertEqual([x["name"] for x in router.chain([a, b], "x")], ["b"])
         self.assertEqual([x["name"] for x in router.chain([a, b], "y")], ["a", "b"])
+
+
+class TRetryDate(unittest.TestCase):
+    def test_http_date_parsed(self):
+        import time
+        from email.utils import formatdate
+        soon = formatdate(time.time() + 45, usegmt=True)
+        secs = router.parse_retry_after({"retry-after": soon})
+        self.assertGreater(secs, 30)
+        self.assertLessEqual(secs, 45)

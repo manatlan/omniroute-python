@@ -53,3 +53,22 @@ class TKey(unittest.TestCase):
                 os.environ["LITE_KEY"] = o_env
             else:
                 os.environ.pop("LITE_KEY", None)
+
+
+class TCorrupt(unittest.TestCase):
+    def test_garbage_file_serves_empty_and_recovers(self):
+        import os, tempfile
+        from store import load_targets, _cache
+        p = os.path.join(tempfile.mkdtemp(), "k.toml")
+        with open(p, "w") as f:
+            f.write("[[targets\n  broken = = =")
+        _cache.update(mtime=0, targets=[])
+        try:
+            self.assertEqual(load_targets(p), [])
+            with open(p, "w") as f:
+                f.write('[[targets]]\nname = "a"\nbase_url = "https://x"\nmodels = ["m"]\n')
+            # no restart needed: next read recovers
+            got = load_targets(p)
+            self.assertEqual(len(got), 1)
+        finally:
+            _cache.update(mtime=0, targets=[])

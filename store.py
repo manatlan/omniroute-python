@@ -12,9 +12,12 @@ def load_targets(path="keys.toml"):
         return []
     if mtime == _cache["mtime"]:
         return _cache["targets"]
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-    targets = data.get("targets", [])
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+        targets = data.get("targets", [])
+    except (ValueError, OSError):
+        return []  # ponytail: mid-edit garbage serves empty, never 500s; next read retries
     _cache.update(mtime=mtime, targets=targets)
     return targets
 
@@ -143,8 +146,11 @@ def save_targets(path, targets):
         if t.get("api_version"):
             lines.append(f"api_version = {q(t['api_version'])}")
         lines.append(f"models = [{', '.join(q(m) for m in t.get('models', []))}]")
-    with open(path, "w") as f:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
         f.write("\n".join(lines) + "\n")
+    import os as _o
+    _o.replace(tmp, path)  # atomic: readers never see half a file
     _cache["mtime"] = 0  # force reload on next read
 
 
