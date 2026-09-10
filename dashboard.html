@@ -53,12 +53,21 @@
   <div id="api-list"></div>
   <h3>Add API</h3>
   <label>Start from</label><select id="f-preset"></select>
+  <label>Type</label><select id="f-kind">
+    <option value="openai">openai (most APIs)</option>
+    <option value="ollama">ollama</option>
+    <option value="anthropic">anthropic</option>
+    <option value="gemini">gemini</option>
+    <option value="azure">azure</option>
+  </select>
   <label>Name</label><input id="f-name" placeholder="groq">
+  <label>Group (optional, shares outages)</label><input id="f-provider" placeholder="groq">
   <label>Address</label><input id="f-base" placeholder="https://…">
   <label>Key</label><input id="f-key" placeholder="paste key, or - for none">
   <label>Cookies (optional, for web logins)</label><input id="f-cookies" placeholder="session=abc; other=123">
   <label>Extra headers (optional, JSON)</label><input id="f-headers" placeholder='{"X-Foo": "bar"}'>
   <label>Models (comma apart)</label>
+  <label>Version (azure only)</label><input id="f-ver" placeholder="2024-06-01">
   <div class="row"><button id="f-fetch" style="flex:1">Fetch live list</button></div><input id="f-models" placeholder="llama-3.3-70b-versatile">
   <button class="primary" id="f-add" style="width:100%">Add</button>
   <h3>Chains</h3>
@@ -157,6 +166,8 @@ function show(id) {
     web: loadWeb, restart: loadRestart})[id]();
 }
 const mask = k => k ? '••••' + String(k).slice(-4) : '—';
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+  ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 async function loadHome() {
   try {
     const [st, q, t] = await Promise.all([
@@ -182,10 +193,10 @@ async function loadApis() {
     const s = q.state.cooldowns[t.name] ? 'resting ' + q.state.cooldowns[t.name] + 's' : 'OK';
     const d = document.createElement('div');
     d.className = 'card';
-    d.innerHTML = `<div class="row"><b class="grow">${t.name}</b><span class="tag">${t.kind || 'openai'}</span>` +
-      (t.provider ? `<span class="tag">${t.provider}</span>` : '') +
-      `<span class="tag">${s}</span></div><div>${(t.models || []).map(m => `<button data-m="${m}" style="min-height:0;padding:6px 10px;margin:2px">${m}</button>`).join('')}</div>` +
-      `<div class="muted">key ${mask(t.api_key)}</div>`;
+    d.innerHTML = `<div class="row"><b class="grow">${esc(t.name)}</b><span class="tag">${esc(t.kind || 'openai')}</span>` +
+      (t.provider ? `<span class="tag">${esc(t.provider)}</span>` : '') +
+      `<span class="tag">${s}</span></div><div>${(t.models || []).map(m => `<button data-m="${esc(m)}" style="min-height:0;padding:6px 10px;margin:2px">${esc(m)}</button>`).join('')}</div>` +
+      `<div class="muted">key ${mask(t.api_key)}${t.cookies ? ' · cookie ✓' : ''}</div>`;
     const r = document.createElement('div');
     r.className = 'row'; r.style.marginTop = '8px';
     const tb = document.createElement('button'); tb.textContent = 'Test';
@@ -209,7 +220,7 @@ async function loadApis() {
   chains.forEach(c => {
     const d = document.createElement('div');
     d.className = 'card';
-    d.innerHTML = `<div class="row"><b class="grow">chain:${c.name}</b></div><div class="muted">${c.members.join(' → ')}</div>`;
+    d.innerHTML = `<div class="row"><b class="grow">chain:${esc(c.name)}</b></div><div class="muted">${esc(c.members.join(' → '))}</div>`;
     const r = document.createElement('div');
     r.className = 'row'; r.style.marginTop = '8px';
     const tb = document.createElement('button'); tb.textContent = 'Test';
@@ -230,6 +241,7 @@ async function loadApis() {
       ((b[0].lite && b[0].free) - (a[0].lite && a[0].free)) || (a[0].provider < b[0].provider ? -1 : 1)
     ).forEach(([p, i]) => sel.append(new Option(p.provider + (p.free ? ' — FREE' : ''), i)));
     sel.onchange = () => { const p = PRESETS[sel.value]; if (!p) return;
+      document.getElementById('f-kind').value = p.kind || 'openai';
       document.getElementById('f-base').value = p.base_url;
       document.getElementById('f-models').value = p.models.map(m => m.id).join(', ');
       document.getElementById('f-name').value = p.provider.split(' ')[0].toLowerCase();
@@ -259,8 +271,12 @@ document.getElementById('f-add').onclick = async () => {
   if (ck) t.cookies = ck;
   const hd = document.getElementById('f-headers').value.trim();
   if (hd) { try { t.headers = JSON.parse(hd); } catch (e) { alert('Headers must be JSON.'); return; } }
-  const p = PRESETS[document.getElementById('f-preset').value];
-  if (p && p.kind !== 'openai') t.kind = p.kind;
+  const kind = document.getElementById('f-kind').value;
+  if (kind !== 'openai') t.kind = kind;
+  const pv = document.getElementById('f-provider').value.trim();
+  if (pv) t.provider = pv;
+  const av = document.getElementById('f-ver').value.trim();
+  if (av) t.api_version = av;
   const res = await api('POST', '/admin/targets', {target: t});
   if (res.error) { alert(res.error.message); return; }
   document.querySelectorAll('#s-apis input').forEach(i => i.value = '');
@@ -285,7 +301,7 @@ async function loadProv() {
     (!pq || p.provider.toLowerCase().includes(pq) || p.models.some(m => m.id.toLowerCase().includes(pq)))).forEach(p => {
     const d = document.createElement('div');
     d.className = 'card';
-    d.innerHTML = `<div class="row"><b class="grow">${p.provider}</b>` +
+    d.innerHTML = `<div class="row"><b class="grow">${esc(p.provider)}</b>` +
       (p.free ? '<span class="tag inv">FREE</span>' : '') + `</div>` +
       `<div class="muted">${p.note}</div><div>${p.models.map(m =>
         `<button data-pm="${m.id}" style="min-height:0;padding:6px 10px;margin:2px">${m.id}</button>` +
@@ -308,6 +324,7 @@ async function chatWith(p, model) {
   if (p.lite) { show('apis');
     const sel = document.getElementById('f-preset');
     sel.value = PRESETS.indexOf(p); sel.onchange();
+    if (p.kind) document.getElementById('f-kind').value = p.kind;
     document.getElementById('f-models').value = model;
   } else { alert(p.provider + ': ' + p.note); }
 }
@@ -394,7 +411,7 @@ async function loadLogs() {
   logs.forEach(e => {
     const t = new Date(e.ts * 1000).toLocaleTimeString();
     tb.insertAdjacentHTML('beforeend',
-      `<tr><td>${t}</td><td>${e.ep}</td><td>${e.target || '—'}</td><td>${e.model || '—'}</td><td>${e.code}</td><td>${e.ms}</td></tr>`);
+      `<tr><td>${esc(t)}</td><td>${esc(e.ep)}</td><td>${esc(e.target || '—')}</td><td>${esc(e.model || '—')}</td><td>${e.code}</td><td>${e.ms}</td></tr>`);
   });
   if (!tb.children.length) tb.innerHTML = '<tr><td colspan="6">Quiet so far.</td></tr>';
 }
@@ -408,7 +425,7 @@ async function loadQuota() {
   tb.innerHTML = '';
   Object.entries(q.stats.by_target).forEach(([n, v]) => {
     const st = openProvs.has(provOf[n]) ? 'resting' : (q.state.cooldowns[n] ? 'resting ' + q.state.cooldowns[n] + 's' : 'OK');
-    tb.insertAdjacentHTML('beforeend', `<tr><td>${n}</td><td>${v.ok}</td><td>${v.err}</td><td>${v.avg_ms}</td><td>${st}</td></tr>`);
+    tb.insertAdjacentHTML('beforeend', `<tr><td>${esc(n)}</td><td>${v.ok}</td><td>${v.err}</td><td>${v.avg_ms}</td><td>${st}</td></tr>`);
   });
   if (!tb.children.length) tb.innerHTML = '<tr><td colspan="5">No calls yet.</td></tr>';
 }
@@ -438,8 +455,8 @@ async function loadWeb() {
   webhooks.forEach(w => {
     const d = document.createElement('div');
     d.className = 'card';
-    d.innerHTML = `<div class="row"><b class="grow">${w.url}</b><button data-t="${w.id}">Try</button>` +
-      `<button data-d="${w.id}">Remove</button></div><div class="muted">${w.events.join(', ')}</div>`;
+    d.innerHTML = `<div class="row"><b class="grow">${esc(w.url)}</b><button data-t="${w.id}">Try</button>` +
+      `<button data-d="${w.id}">Remove</button></div><div class="muted">${esc(w.events.join(', '))}</div>`;
     box.append(d);
   });
   box.querySelectorAll('[data-t]').forEach(b => b.onclick = () =>
