@@ -18,6 +18,9 @@ ROUTES = {
     ("GET", "/admin/chains"), ("POST", "/admin/chains"), ("DELETE", "/admin/chains/*"),
     ("POST", "/v1/test/call"), ("GET", "/admin/logs?limit=100"),
     ("POST", "/admin/discover"),
+    ("POST", "/admin/oauth/claude_start"), ("POST", "/admin/oauth/claude_finish"),
+    ("POST", "/admin/oauth/codex_start"), ("POST", "/admin/oauth/codex_poll"),
+    ("POST", "/admin/oauth/status"), ("POST", "/admin/oauth/disconnect"),
     ("DELETE", "/admin/targets/*"), ("DELETE", "/admin/webhooks/*"),
 }
 

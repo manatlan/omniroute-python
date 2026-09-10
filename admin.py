@@ -2,6 +2,7 @@
 import urllib.parse
 
 import catalog
+import oauth as _oauth
 import providers
 import router
 import stats
@@ -208,6 +209,81 @@ def handle(h, method):
                 return True
             h._send(200, {"models": ids})
             return True
+        if parts[0] == "oauth":
+            import time as _t
+            body, err = _json(h) if method == "POST" else ({}, None)
+            if err:
+                h._send(400, {"error": {"message": "bad json"}})
+                return True
+            sub = parts[1] if len(parts) > 1 else ""
+            name = (body or {}).get("target", "")
+            t = next((x for x in _list() if x.get("name") == name), None)
+            if sub in ("claude_start", "codex_start", "claude_finish", "codex_poll", "status", "disconnect") and not t:
+                h._send(404, {"error": {"message": "unknown target"}})
+                return True
+            if sub == "claude_start":
+                if t.get("kind") != "claude-oauth":
+                    h._send(400, {"error": {"message": "not a claude-oauth target"}})
+                    return True
+                h._send(200, _oauth.claude_start())
+                return True
+            if sub == "claude_finish":
+                res, derr = _oauth.claude_finish(name, (body or {}).get("code", ""),
+                                                 (body or {}).get("verifier", ""), (body or {}).get("state", ""))
+                if derr:
+                    h._send(502, {"error": {"message": derr}})
+                    return True
+                h._send(200, {"ok": True, "email": (res or {}).get("email")})
+                return True
+            if sub == "codex_start":
+                if t.get("kind") != "codex-oauth":
+                    h._send(400, {"error": {"message": "not a codex-oauth target"}})
+                    return True
+                res, derr = _oauth.codex_start()
+                if derr:
+                    h._send(502, {"error": {"message": derr}})
+                    return True
+                h._send(200, res)
+                return True
+            if sub == "codex_poll":
+                if t.get("kind") != "codex-oauth":
+                    h._send(400, {"error": {"message": "not a codex-oauth target"}})
+                    return True
+                try:
+                    interval = int((body or {}).get("interval") or 5)
+                except (ValueError, TypeError):
+                    interval = 5
+                try:
+                    deadline = max(1, min(25, int((body or {}).get("deadline") or 8)))
+                except (ValueError, TypeError):
+                    deadline = 8
+                got, derr = _oauth.codex_poll((body or {}).get("device_auth_id", ""),
+                                              (body or {}).get("user_code", ""), interval,
+                                              deadline_s=deadline)
+                if derr and derr != "pending":
+                    h._send(502, {"error": {"message": derr}})
+                    return True
+                if derr == "pending":
+                    h._send(200, {"done": False})
+                    return True
+                res, ferr = _oauth.codex_finish(name, got[0], got[1])
+                if ferr:
+                    h._send(502, {"error": {"message": ferr}})
+                    return True
+                h._send(200, {"done": True})
+                return True
+            if sub == "status":
+                creds = _oauth.get_tokens(name)
+                if not creds:
+                    h._send(200, {"connected": False})
+                    return True
+                h._send(200, {"connected": True, "email": creds.get("email"),
+                              "expires_in": max(0, int(creds.get("expires_at", 0) - _t.time()))})
+                return True
+            if sub == "disconnect":
+                _oauth.delete_tokens(name)
+                h._send(200, {"ok": True})
+                return True
         if parts[0] == "models" and method == "GET" and len(parts) == 1:
             h._send(200, {"models": configured_model_map()})
             return True
@@ -242,7 +318,19 @@ WEB_KINDS = {
 SYNTHETIC_PRESETS = [
     {"id": "claude-web", "format": "?", "kind": None, "base": "https://claude.ai",
      "auth": "cookie", "free": False, "tos": "", "models": []},
+    {"id": "claude-oauth", "format": "anthropic", "kind": None, "base": "https://api.anthropic.com",
+     "auth": "oauth", "free": False, "tos": "",
+     "models": [{"id": "claude-sonnet-4-6", "name": "Sonnet (subscription)", "free": False},
+                {"id": "claude-opus-4-6", "name": "Opus (subscription)", "free": False}]},
+    {"id": "codex-oauth", "format": "?", "kind": None, "base": "https://chatgpt.com/backend-api/codex/responses",
+     "auth": "oauth", "free": False, "tos": "",
+     "models": [{"id": "gpt-5.6-sol", "name": "GPT Sol (subscription)", "free": False}]},
 ]
+
+OAUTH_KINDS = {
+    "claude-oauth": ("claude-oauth", "Sign in with your Claude Pro/Max account (one browser login, auto-refresh after)."),
+    "codex-oauth": ("codex-oauth", "Sign in with your ChatGPT account via device code (auto-refresh after)."),
+}
 
 AUTH_NOTE = {
     "cookie": "Needs a browser cookie — open the site, copy it, paste as the key.",
@@ -255,7 +343,7 @@ def catalog_presets():
     out = []
     for p in list(catalog.CATALOG) + SYNTHETIC_PRESETS:
         http = p["base"].startswith(("https://", "http://"))
-        web_kind, web_note = WEB_KINDS.get(p["id"], (None, ""))
+        web_kind, web_note = WEB_KINDS.get(p["id"], OAUTH_KINDS.get(p["id"], (None, "")))
         if web_kind and http:
             pkind, lite, note = web_kind, True, web_note
         else:

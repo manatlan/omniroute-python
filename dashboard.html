@@ -73,6 +73,7 @@
   <div class="row"><button id="f-fetch" style="flex:1">Fetch live list</button></div>
   <div class="row"><button id="f-all" style="flex:1">All</button><button id="f-free" style="flex:1">Free only</button></div><input id="f-models" placeholder="llama-3.3-70b-versatile">
   <button class="primary" id="f-add" style="width:100%">Add</button>
+  <div id="oauth-box"></div>
   <h3>Chains</h3>
   <div class="muted">Try APIs in order until one works. Use as model <b>chain:name</b>.</div>
   <div id="chain-list"></div>
@@ -211,6 +212,17 @@ async function loadApis() {
     del.onclick = async () => { if (confirm('Remove ' + t.name + '?')) {
       await api('DELETE', '/admin/targets/' + encodeURIComponent(t.name)); loadApis(); } };
     r.append(tb, del); d.append(r); box.append(d);
+    if ((t.kind || '').includes('oauth')) {
+      const ob = document.createElement('button'); ob.textContent = 'Connect';
+      ob.style.marginTop = '8px';
+      ob.onclick = () => oauthPanel(t);
+      const st = document.createElement('span'); st.className = 'tag'; st.textContent = '…';
+      st.style.marginTop = '8px';
+      api('POST', '/admin/oauth/status', {target: t.name}).then(s => {
+        st.textContent = s.connected ? ('✓ ' + (s.email || 'connected')) : 'not connected'; });
+      const r2 = document.createElement('div'); r2.className = 'row';
+      r2.append(st, ob); d.append(r2);
+    }
     d.querySelectorAll('[data-m]').forEach(mb => mb.onclick = async () => {
       mb.disabled = true;
       const res = await api('POST', '/admin/targets/' + encodeURIComponent(t.name) + '/test', {model: mb.dataset.m});
@@ -307,6 +319,53 @@ document.getElementById('ch-add').onclick = async () => {
   document.getElementById('ch-members').value = '';
   loadApis();
 };
+async function oauthPanel(t) {
+  const box = document.getElementById('oauth-box');
+  box.innerHTML = `<div class="card"><b>Connect ${esc(t.name)}</b><div id="oauth-body"></div></div>`;
+  const body = document.getElementById('oauth-body');
+  if (t.kind === 'claude-oauth') {
+    const s = await api('POST', '/admin/oauth/claude_start', {target: t.name});
+    if (s.error) { body.textContent = s.error.message; return; }
+    body.innerHTML = `<div>1. Open <a href="${s.url}" target="_blank" rel="noopener">this login link</a></div>` +
+      `<div>2. Approve, copy the code from the address bar, paste:</div>` +
+      `<input id="oa-code" placeholder="code">` +
+      `<div class="row"><button class="primary" id="oa-go">Finish</button>` +
+      `<button id="oa-off">Disconnect</button></div>`;
+    window._oa = {verifier: s.verifier, state: s.state};
+    document.getElementById('oa-go').onclick = async () => {
+      const r = await api('POST', '/admin/oauth/claude_finish', {target: t.name,
+        code: document.getElementById('oa-code').value.trim(),
+        verifier: window._oa.verifier, state: window._oa.state});
+      alert(r.error ? r.error.message : ('Connected' + (r.email ? ' as ' + r.email : '')));
+      loadApis();
+    };
+    document.getElementById('oa-off').onclick = async () => {
+      await api('POST', '/admin/oauth/disconnect', {target: t});
+      loadApis();
+    };
+  } else {
+    const s = await api('POST', '/admin/oauth/codex_start', {target: t.name});
+    if (s.error || !s.user_code) { body.textContent = (s.error || {}).message || 'start failed'; return; }
+    body.innerHTML = `<div>1. Open <a href="${s.verification_uri}" target="_blank" rel="noopener">this page</a></div>` +
+      `<div class="keybox">${esc(s.user_code)}</div><div>2. Type the code, come back, press:</div>` +
+      `<div class="row"><button class="primary" id="oa-go">I've approved — check</button>` +
+      `<button id="oa-off">Disconnect</button></div><div class="muted" id="oa-wait"></div>`;
+    document.getElementById('oa-go').onclick = async () => {
+      for (let i = 0; i < 12; i++) {
+        document.getElementById('oa-wait').textContent = 'Checking… (' + (i + 1) + ')';
+        const r = await api('POST', '/admin/oauth/codex_poll', {target: t.name,
+          device_auth_id: s.device_auth_id, user_code: s.user_code, interval: s.interval || 5});
+        if (r.error) { alert(r.error.message); return; }
+        if (r.done) { alert('Connected'); loadApis(); return; }
+      }
+      alert('Not approved yet — press check again after approving.');
+    };
+    document.getElementById('oa-off').onclick = async () => {
+      await api('POST', '/admin/oauth/disconnect', {target: t});
+      loadApis();
+    };
+  }
+}
 async function loadProv() {
   if (!PRESETS.length) PRESETS = (await api('GET', '/admin/presets')).presets;
   const freeOnly = document.getElementById('free-only').checked;

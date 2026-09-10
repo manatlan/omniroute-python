@@ -243,6 +243,96 @@ def from_gemini(body):
     return {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}
 
 
+def _oauth_token(t, force=False):
+    import oauth as _o
+    return _o.valid_token(t.get("name", ""), force=force)
+
+
+def _call_claude_oauth(t, payload, timeout=30):
+    # Claude subscription via public CLI OAuth (mirrors claudeIdentity beta contract).
+    token = _oauth_token(t)
+    if not token:
+        return 401, {}, b'{"error":{"message":"claude oauth not connected"}}'
+    betas = ["oauth-2025-04-20"]
+    if isinstance(payload.get("tools"), list) and payload["tools"]:
+        betas.insert(0, "claude-code-20250219")
+    def _do(tok):
+        return post((t.get("base_url") or "https://api.anthropic.com").rstrip("/") + "/v1/messages",
+                    t_headers(t, {"Authorization": "Bearer " + tok,
+                                  "anthropic-version": "2023-06-01",
+                                  "anthropic-beta": ",".join(betas)}),
+                    json.dumps(to_anthropic(payload)).encode(), timeout)
+    code, h, body = _do(token)
+    if code == 401 and _oauth_token(t, force=True):
+        code, h, body = _do(_oauth_token(t))
+    if code == 200:
+        body = json.dumps(from_anthropic(body)).encode()
+    return code, h, body
+
+
+def responses_text(body):
+    # Responses-API SSE -> (text|None, err|None). Accumulates output_text deltas.
+    import json as _j
+    raw = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else ""
+    text = []
+    for ev in raw.split("\n\n"):
+        line = next((ln for ln in ev.split("\n") if ln.startswith("data:")), "")
+        d = line[5:].strip()
+        if not d or d == "[DONE]":
+            continue
+        try:
+            o = _j.loads(d)
+        except ValueError:
+            continue
+        if o.get("type") == "response.output_text.delta" and isinstance(o.get("delta"), str):
+            text.append(o["delta"])
+        if o.get("type") == "response.failed":
+            err = ((o.get("response") or {}).get("error") or {}).get("message")
+            return None, err or "response failed"
+    out = "".join(text)
+    return (out, None) if out else (None, "empty reply")
+
+
+def _call_codex(t, payload, timeout=30):
+    # ChatGPT subscription via Codex device OAuth -> backend-api Responses face.
+    import json as _j
+    token = _oauth_token(t)
+    if not token:
+        return 401, {}, b'{"error":{"message":"codex oauth not connected"}}'
+    items = []
+    instructions = ""
+    for m in payload.get("messages", []) or []:
+        if not isinstance(m, dict):
+            continue
+        c = m.get("content") or ""
+        if m.get("role") == "system" and isinstance(c, str):
+            instructions += c
+            continue
+        if m.get("role") in ("user", "assistant") and isinstance(c, str) and c:
+            items.append({"role": m["role"], "content": [{"type": "input_text", "text": c}]})
+    if not items:
+        return 400, {}, b'{"error":{"message":"empty prompt"}}'
+    req = {"model": payload.get("model", ""), "input": items, "stream": True, "store": False}
+    if instructions:
+        req["instructions"] = instructions
+    def _do(tok):
+        return post_stream((t.get("base_url") or "https://chatgpt.com/backend-api/codex/responses").rstrip("/"),
+                           t_headers(t, {"Authorization": "Bearer " + tok,
+                                         "Origin": "https://chatgpt.com",
+                                         "Referer": "https://chatgpt.com/"}),
+                           _j.dumps(req).encode(), timeout)
+    code, h, chunks = _do(token)
+    if code == 401 and _oauth_token(t, force=True):
+        code, h, chunks = _do(_oauth_token(t))
+    if code != 200:
+        return code, h, chunks
+    data = b"".join(chunks)
+    out, err = responses_text(data)
+    if err:
+        return 502, h, ('{"error":{"message":"codex: %s"}}' % err).encode()
+    return 200, h, _j.dumps({"choices": [{"message": {"role": "assistant", "content": out}, "finish_reason": "stop"}]}).encode()
+
+
 def _call_grok(t, payload, timeout=30):
     # grok.com cookie flow (mirrors open-sse/executors/grok-web.ts minus TLS impersonation).
     import json as _j
@@ -320,6 +410,10 @@ def _call_raw(t, payload, timeout=30):
     kind = t.get("kind", "openai")
     if kind == "grok-web":
         return _call_grok(t, payload, timeout)
+    if kind == "claude-oauth":
+        return _call_claude_oauth(t, payload, timeout)
+    if kind == "codex-oauth":
+        return _call_codex(t, payload, timeout)
     if kind == "claude-web":
         return _call_claude(t, payload, timeout)
     if kind == "anthropic":

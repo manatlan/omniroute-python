@@ -421,3 +421,133 @@ class TWeb(unittest.TestCase):
         finally:
             providers.post, providers.get = orig_post, orig_get
             srv.shutdown()
+
+
+class TOAuth(unittest.TestCase):
+    def test_responses_sse_parse(self):
+        body = (b'data: {"type":"response.output_text.delta","delta":"Hel"}\n\n'
+                b'data: {"type":"response.output_text.delta","delta":"lo"}\n\n'
+                b'data: {"type":"response.completed","response":{}}\n\n')
+        self.assertEqual(providers.responses_text(body), ("Hello", None))
+        self.assertEqual(providers.responses_text(b"garbage")[1], "empty reply")
+        fail = b'data: {"type":"response.failed","response":{"error":{"message":"nope"}}}\n\n'
+        self.assertEqual(providers.responses_text(fail), (None, "nope"))
+
+    def test_claude_oauth_needs_connection(self):
+        import oauth as _o
+        _o.delete_tokens("ghost-target")
+        code, _, body = providers.call_target(
+            {"kind": "claude-oauth", "name": "ghost-target", "base_url": "https://x", "models": ["m"]},
+            {"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(code, 401)
+        self.assertIn(b"not connected", body)
+
+    def test_claude_oauth_chat_and_refresh(self):
+        import oauth as _o
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+        seen = {}
+
+        class FakeApi(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(n)
+                try:
+                    body = json.loads(raw)
+                except ValueError:
+                    body = {}
+                seen["auth"] = self.headers.get("Authorization")
+                seen["beta"] = self.headers.get("anthropic-beta")
+                seen["path"] = self.path
+                if self.path == "/v1/oauth/token":
+                    out = json.dumps({"access_token": "newtok", "refresh_token": "newref",
+                                      "expires_in": 3600}).encode()
+                else:
+                    out = json.dumps({"content": [{"type": "text", "text": "yo"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeApi)
+        port = srv.server_address[1]
+        Thread(target=srv.serve_forever, daemon=True).start()
+        import tempfile, os
+        tmp = tempfile.mkdtemp()
+        oexp = os.path.expanduser
+        os.path.expanduser = lambda p: tmp if p == "~" else oexp(p)
+        orig_post = providers.post
+        providers.post = lambda url, h, b, timeout=30: orig_post(
+            f"http://127.0.0.1:{port}" + url[url.index("/", 8):], h, b, timeout)
+        try:
+            _o.save_tokens("t1", "claude", "oldt", "refr", -5)  # expired forces refresh
+            code, _, body = providers.call_target(
+                {"kind": "claude-oauth", "name": "t1", "base_url": "https://api.anthropic.com",
+                 "models": ["m"]},
+                {"model": "m", "messages": [{"role": "user", "content": "hi"}]})
+            self.assertEqual(code, 200)
+            self.assertIn("yo", json.loads(body)["choices"][0]["message"]["content"])
+            self.assertEqual(seen["auth"], "Bearer newtok")
+            self.assertIn("oauth-2025-04-20", seen["beta"])
+            self.assertIn("/v1/messages", seen["path"])
+        finally:
+            providers.post = orig_post
+            os.path.expanduser = oexp
+            srv.shutdown()
+
+
+class TCodexChat(unittest.TestCase):
+    def test_codex_roundtrip(self):
+        import oauth as _o
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from threading import Thread
+
+        class FakeCodex(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n))
+                assert body["input"][0]["content"][0]["type"] == "input_text"
+                assert body["input"][0]["content"][0]["text"] == "hi"
+                assert body["model"] == "gpt-5.6-sol"
+                out = (b'data: {"type":"response.output_text.delta","delta":"Hey"}\n\n'
+                       b'data: {"type":"response.completed","response":{}}\n\n')
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeCodex)
+        port = srv.server_address[1]
+        Thread(target=srv.serve_forever, daemon=True).start()
+        import tempfile, os
+        tmp = tempfile.mkdtemp()
+        oexp = os.path.expanduser
+        os.path.expanduser = lambda p: tmp if p == "~" else oexp(p)
+        orig_stream = providers.post_stream
+        providers.post_stream = lambda url, h, b, timeout=30, chunk=65536: orig_stream(
+            f"http://127.0.0.1:{port}/backend-api/codex/responses", h, b, timeout)
+        try:
+            _o.save_tokens("cx", "codex", "tok123", "ref123", 3600)
+            code, _, body = providers.call_target(
+                {"kind": "codex-oauth", "name": "cx",
+                 "base_url": "https://chatgpt.com/backend-api/codex/responses",
+                 "models": ["gpt-5.6-sol"]},
+                {"model": "gpt-5.6-sol", "messages": [{"role": "user", "content": "hi"}]})
+            self.assertEqual(code, 200)
+            self.assertIn("Hey", json.loads(body)["choices"][0]["message"]["content"])
+        finally:
+            providers.post_stream = orig_stream
+            os.path.expanduser = oexp
+            srv.shutdown()

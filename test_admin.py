@@ -383,3 +383,82 @@ class TWebPresets(unittest.TestCase):
         claude = next(p for p in _a.catalog_presets() if p["provider"] == "claude-web")
         self.assertTrue(claude["lite"])
         self.assertEqual(claude["auth"], "cookie")
+
+
+class TOAuthFlow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self._o = os.path.expanduser
+        os.path.expanduser = lambda p: self.tmp if p == "~" else self._o(p)
+        self._old_path, admin.TARGETS_PATH = admin.TARGETS_PATH, os.path.join(self.tmp, "k.toml")
+        self._old_key = os.environ.pop("LITE_KEY", None)
+        store._cache.update(mtime=0, targets=[])
+
+    def tearDown(self):
+        os.path.expanduser = self._o
+        admin.TARGETS_PATH = self._old_path
+        if self._old_key is not None:
+            os.environ["LITE_KEY"] = self._old_key
+
+    def req(self, method, path, body=None):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request(method, path, json.dumps(body) if body is not None else None,
+                  {"Content-Type": "application/json"})
+        r = c.getresponse()
+        return r.status, json.loads(r.read())
+
+    def _add(self, name, kind):
+        code, _ = self.req("POST", "/admin/targets", {"target": {
+            "name": name, "kind": kind, "base_url": "https://x", "api_key": "-", "models": ["m"]}})
+        self.assertEqual(code, 200)
+
+    def test_claude_start_shape(self):
+        self._add("c", "claude-oauth")
+        code, out = self.req("POST", "/admin/oauth/claude_start", {"target": "c"})
+        self.assertEqual(code, 200)
+        self.assertIn("claude.ai/oauth/authorize", out["url"])
+        self.assertIn("code_challenge=", out["url"])
+        self.assertTrue(out["verifier"] and out["state"])
+
+    def test_codex_poll_pending(self):
+        import providers as _p
+        self._add("x", "codex-oauth")
+        o = _p.post
+        _p.post = lambda *a, **k: (404, {}, b"nope")
+        try:
+            code, out = self.req("POST", "/admin/oauth/codex_poll",
+                                 {"target": "x", "device_auth_id": "d", "user_code": "u",
+                                  "interval": 1})
+            self.assertEqual((code, out), (200, {"done": False}))
+        finally:
+            _p.post = o
+
+    def test_status_disconnect(self):
+        import oauth as _o
+        self._add("c", "claude-oauth")
+        code, out = self.req("POST", "/admin/oauth/status", {"target": "c"})
+        self.assertEqual(out, {"connected": False})
+        _o.save_tokens("c", "claude", "a", "r", 3600, "me@x.com")
+        code, out = self.req("POST", "/admin/oauth/status", {"target": "c"})
+        self.assertTrue(out["connected"])
+        self.assertEqual(out["email"], "me@x.com")
+        code, out = self.req("POST", "/admin/oauth/disconnect", {"target": "c"})
+        self.assertEqual(out, {"ok": True})
+        code, out = self.req("POST", "/admin/oauth/status", {"target": "c"})
+        self.assertEqual(out, {"connected": False})
+
+    def test_wrong_kind_rejected(self):
+        self._add("o", "openai")
+        code, out = self.req("POST", "/admin/oauth/claude_start", {"target": "o"})
+        self.assertEqual(code, 400)
