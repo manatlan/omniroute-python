@@ -76,14 +76,15 @@ Ported from the main project's executors to pure HTTP — no browser needed:
 | Provider | Kind | Paste as key | Notes |
 |---|---|---|---|
 | grok-web | `grok-web` | `sso` value or full cookie | Modes fast/expert/heavy; anti-bot may still block stock TLS |
+| qwen-web | `qwen-web` | JWT from localStorage, or blank (anonymous limits) | v2 chat flow + midtoken; WAF decides, Test judges |
 | claude-web | `claude-web` | `sessionKey` value or full cookie | Model name as on claude.ai; same TLS caveat |
 
 Not portable, stated plainly: **deepseek-web** (needs a PoW hash-grinder too
 slow for stdlib Python — measured 857 hashes/sec vs challenges needing tens
 of thousands — so requests would take minutes), **gemini-web**/**chatgpt-web**
-(full Playwright automation in the original; no HTTP port exists).
+(full Playwright automation in the original; no HTTP port exists). meta.ai is the same story (integrity-checked DGW WebSockets).
 Their cards say so, and Test reports `blocked, needs browser` when a bot-wall
 answers instead of the API.
 
 ## Tests
-`python3 -m unittest` (41 tests, stdlib only).
+`python3 -m unittest` (119 tests, stdlib only) + `python3 harness.py` (31 black-box checks).
