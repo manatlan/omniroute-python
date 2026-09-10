@@ -26,6 +26,18 @@ def _classify(t, model, code, hdrs):
     return router.classify(t, model, code, hdrs)
 
 
+def _known_models():
+    return sorted({m for t in store.load_targets() for m in t.get("models", [])})
+
+
+def _unknown(model):
+    if not model.startswith("chain:"):
+        avail = _known_models()
+        if model not in avail:
+            return {"error": {"message": "unknown model", "available": avail}}
+    return None
+
+
 def _resolve(model):
     """-> (targets, err). Expands chain:NAME to member targets in declared order."""
     all_targets = store.load_targets()
@@ -173,6 +185,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": {"message": cerr}})
             if not targets:
                 return self._send(503, {"error": {"message": "no targets configured"}})
+            unk = _unknown(model)
+            if unk:
+                return self._send(404, unk)
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
                 name = t.get("name", "")
@@ -230,6 +245,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return self.wfile.write(body)
                 _fire_breaker(t, attempt.get("model", ""), code, hdrs)
+                _log("chat", name, attempt.get("model", ""), code, int((_tt.time() - _t0) * 1000))
                 last = (code, body)
             code, body = last
             ms = int((_tt.time() - _t0) * 1000)
@@ -253,6 +269,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": {"message": "model required"}})
             if model.startswith("chain:"):
                 return self._send(400, {"error": {"message": "chains are chat-only"}})
+            unk = _unknown(model)
+            if unk:
+                return self._send(404, unk)
             targets = [t for t in router.chain(store.load_targets(), model) if t.get("kind", "openai") != "anthropic"]
             if not targets:
                 return self._send(400, {"error": {"message": "no embedding-capable target"}})
@@ -271,6 +290,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return self.wfile.write(body)
                 _fire_breaker(t, model, code, hdrs)
+                _log("embeddings", t.get("name", ""), model, code, int((_tt.time() - _t0) * 1000))
                 last = (code, body)
             code, body = last
             ms = int((_tt.time() - _t0) * 1000)
@@ -297,6 +317,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": {"message": cerr}})
             if not targets:
                 return self._send(503, {"error": {"message": "no targets configured"}})
+            unk = _unknown(model)
+            if unk:
+                return self._send(404, unk)
             t = targets[0]
             probe = {"model": model if model in t.get("models", []) else (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
             start = _t.time()
