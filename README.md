@@ -70,5 +70,18 @@ First run is open; press New key once and the server + dashboard lock to it.
 - **Fetch live list**: the Add form asks the company itself what models it serves
   right now, so you use their names, not a stale catalog.
 
+## Web providers (claude-web, grok-web…)
+Ported from the main project's executors to pure HTTP — no browser needed:
+
+| Provider | Kind | Paste as key | Notes |
+|---|---|---|---|
+| grok-web | `grok-web` | `sso` value or full cookie | Modes fast/expert/heavy; anti-bot may still block stock TLS |
+| claude-web | `claude-web` | `sessionKey` value or full cookie | Model name as on claude.ai; same TLS caveat |
+
+Not portable, stated plainly: **deepseek-web** (needs a PoW hash-grinder too
+slow for stdlib Python), **gemini-web**/**chatgpt-web** (need a live browser).
+Their cards say so, and Test reports `blocked, needs browser` when a bot-wall
+answers instead of the API.
+
 ## Tests
 `python3 -m unittest` (41 tests, stdlib only).
