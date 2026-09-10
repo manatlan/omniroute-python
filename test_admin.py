@@ -339,3 +339,35 @@ class TDiscover(unittest.TestCase):
                   {"Content-Type": "application/json"})
         r = c.getresponse()
         self.assertEqual(r.status, 502)
+
+
+class TPayloadType(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def test_array_body_targets_400(self):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", "/admin/targets", "[1]", {"Content-Type": "application/json"})
+        self.assertEqual(c.getresponse().status, 400)
+
+    def test_save_failure_500(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        old, admin.TARGETS_PATH = admin.TARGETS_PATH, d  # a directory, not a file
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/admin/targets",
+                      json.dumps({"target": {"name": "x", "base_url": "https://x", "models": []}}),
+                      {"Content-Type": "application/json"})
+            r = c.getresponse()
+            self.assertEqual(r.status, 500)
+            self.assertIn("error", json.loads(r.read()))
+        finally:
+            admin.TARGETS_PATH = old

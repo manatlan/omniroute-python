@@ -411,3 +411,34 @@ class TCacheTtl(unittest.TestCase):
             self.assertEqual(c.getresponse().status, 400)
         finally:
             _s.load_targets, _p.call_target = o
+
+
+class TPayloadType(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def _post(self, path, raw):
+        c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("POST", path, raw, {"Content-Type": "application/json"})
+        r = c.getresponse()
+        return r.status, r.read()
+
+    def test_array_body_chat_400(self):
+        code, _ = self._post("/v1/chat/completions", "[1,2]")
+        self.assertEqual(code, 400)
+
+    def test_string_body_embeddings_400(self):
+        code, _ = self._post("/v1/embeddings", '"hi"')
+        self.assertEqual(code, 400)
+
+    def test_null_body_probe_400(self):
+        code, _ = self._post("/v1/test/call", "null")
+        self.assertEqual(code, 400)

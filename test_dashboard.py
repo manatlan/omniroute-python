@@ -144,3 +144,13 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TTabWiring(unittest.TestCase):
+    def test_every_tab_has_section_and_loader(self):
+        import re
+        tabs = re.findall(r"\['(\w+)','[^']*'\]", HTML)
+        self.assertGreater(len(tabs), 5)
+        for tid in tabs:
+            self.assertIn('id="s-%s"' % tid, HTML)
+            self.assertRegex(HTML, r"\b%s: load\w+" % tid)

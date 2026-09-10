@@ -144,6 +144,8 @@ class Handler(BaseHTTPRequestHandler):
             payload, err = self._body()
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
+            if not isinstance(payload, dict):
+                return self._send(400, {"error": {"message": "bad json"}})
             if isinstance(payload.get("messages"), list):
                 payload["messages"] = compress.trim(payload["messages"])
             import hashlib as _h, os as _o
@@ -244,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
             payload, err = self._body()
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
+            if not isinstance(payload, dict):
+                return self._send(400, {"error": {"message": "bad json"}})
             model = payload.get("model") or ""
             if not model:
                 return self._send(400, {"error": {"message": "model required"}})
@@ -283,6 +287,8 @@ class Handler(BaseHTTPRequestHandler):
             payload, err = self._body()
             if err:
                 return self._send(413 if err == "large" else 400, {"error": {"message": "bad json" if err == "bad" else "body too large"}})
+            if not isinstance(payload, dict):
+                return self._send(400, {"error": {"message": "bad json"}})
             model = payload.get("model") or ""
             if not model:
                 return self._send(400, {"error": {"message": "model required"}})

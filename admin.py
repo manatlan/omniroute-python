@@ -77,6 +77,13 @@ def targets_crud(method, parts, body):
     return 404, {"error": {"message": "not found"}}
 
 
+def _json(h):
+    # parsed body constrained to dict; lists/strings/numbers are 400s, not crashes.
+    body, err = h._body()
+    if err or not isinstance(body, dict):
+        return None, "bad"
+    return body, None
+
 def handle(h, method):
     """-> True if an /admin/* path was handled (auth enforced)."""
     if not h.path.startswith("/admin/"):
@@ -84,137 +91,145 @@ def handle(h, method):
     if not h._authed():
         h._deny()
         return True
-    parts = h.path.split("?", 1)[0][len("/admin/"):].split("/")
-    if parts[0] == "quota" and len(parts) == 1:
-        if method == "GET":
-            h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
-            return True
-        if method == "POST" and (h._body()[0] or {}).get("reset"):
-            stats.reset()
-            router._reset()
-            h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
-            return True
-    if parts[0] == "key" and len(parts) == 1 and method == "GET":
-        h._send(200, {"key": store.load_server_key(), "base_url": "http://localhost:20128/v1"})
-        return True
-    if parts[0] == "key" and parts[1:] == ["rotate"] and method == "POST":
-        h._send(200, {"key": store.save_server_key(), "base_url": "http://localhost:20128/v1"})
-        return True
-    if parts[0] == "restart" and len(parts) == 1 and method == "POST":
-        import os as _o
-        import sys as _s
-        import threading as _t
-        h._send(200, {"ok": True})
-        me = _o.path.abspath(_o.path.join(_o.path.dirname(__file__), "lite.py"))
-        _t.Timer(0.3, lambda: _o.execv(_s.executable, [_s.executable, me])).start()
-        return True
-    if parts[0] == "webhooks":
-        if method == "GET" and len(parts) == 1:
-            h._send(200, {"webhooks": webhooks.list_hooks(), "events": list(webhooks.EVENTS)})
-            return True
-        if method == "POST" and len(parts) == 1:
-            body, err = h._body()
-            if err:
-                h._send(400, {"error": {"message": "bad json"}})
+
+    try:
+        parts = h.path.split("?", 1)[0][len("/admin/"):].split("/")
+        if parts[0] == "quota" and len(parts) == 1:
+            if method == "GET":
+                h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
                 return True
-            hid, herr = webhooks.add_hook((body or {}).get("url"), (body or {}).get("events"))
-            if herr:
-                h._send(400, {"error": {"message": herr}})
+            if method == "POST" and (_json(h)[0] or {}).get("reset"):
+                stats.reset()
+                router._reset()
+                h._send(200, {"stats": stats.snap(), "state": router.snapshot()})
                 return True
-            h._send(200, {"webhooks": webhooks.list_hooks()})
+        if parts[0] == "key" and len(parts) == 1 and method == "GET":
+            h._send(200, {"key": store.load_server_key(), "base_url": "http://localhost:20128/v1"})
             return True
-        if method == "DELETE" and len(parts) == 2:
-            import urllib.parse as _up
-            h._send(200, {"webhooks": webhooks.delete_hook(_up.unquote(parts[1]))})
+        if parts[0] == "key" and parts[1:] == ["rotate"] and method == "POST":
+            h._send(200, {"key": store.save_server_key(), "base_url": "http://localhost:20128/v1"})
             return True
-        if method == "POST" and len(parts) == 3 and parts[2] == "test":
-            import urllib.parse as _up
-            hook = next((x for x in webhooks.list_hooks() if str(x.get("id")) == _up.unquote(parts[1])), None)
-            if not hook:
-                h._send(404, {"error": {"message": "unknown webhook"}})
-                return True
-            webhooks._fire(hook["url"], {"event": "test", "msg": "hello from omniroute-lite"})
+        if parts[0] == "restart" and len(parts) == 1 and method == "POST":
+            import os as _o
+            import sys as _s
+            import threading as _t
             h._send(200, {"ok": True})
+            me = _o.path.abspath(_o.path.join(_o.path.dirname(__file__), "lite.py"))
+            _t.Timer(0.3, lambda: _o.execv(_s.executable, [_s.executable, me])).start()
             return True
-    if parts[0] == "chains":
-        if method == "GET" and len(parts) == 1:
-            h._send(200, {"chains": store.load_chains()})
+        if parts[0] == "webhooks":
+            if method == "GET" and len(parts) == 1:
+                h._send(200, {"webhooks": webhooks.list_hooks(), "events": list(webhooks.EVENTS)})
+                return True
+            if method == "POST" and len(parts) == 1:
+                body, err = _json(h)
+                if err:
+                    h._send(400, {"error": {"message": "bad json"}})
+                    return True
+                hid, herr = webhooks.add_hook((body or {}).get("url"), (body or {}).get("events"))
+                if herr:
+                    h._send(400, {"error": {"message": herr}})
+                    return True
+                h._send(200, {"webhooks": webhooks.list_hooks()})
+                return True
+            if method == "DELETE" and len(parts) == 2:
+                import urllib.parse as _up
+                h._send(200, {"webhooks": webhooks.delete_hook(_up.unquote(parts[1]))})
+                return True
+            if method == "POST" and len(parts) == 3 and parts[2] == "test":
+                import urllib.parse as _up
+                hook = next((x for x in webhooks.list_hooks() if str(x.get("id")) == _up.unquote(parts[1])), None)
+                if not hook:
+                    h._send(404, {"error": {"message": "unknown webhook"}})
+                    return True
+                webhooks._fire(hook["url"], {"event": "test", "msg": "hello from omniroute-lite"})
+                h._send(200, {"ok": True})
+                return True
+        if parts[0] == "chains":
+            if method == "GET" and len(parts) == 1:
+                h._send(200, {"chains": store.load_chains()})
+                return True
+            if method == "POST" and len(parts) == 1:
+                body, err = _json(h)
+                if err:
+                    h._send(400, {"error": {"message": "bad json"}})
+                    return True
+                chains = store.load_chains()
+                c = (body or {}).get("chain")
+                known = [t.get("name") for t in _list()]
+                err = store.validate_chain(c, known) if c else "chain required"
+                if err:
+                    h._send(400, {"error": {"message": err}})
+                    return True
+                if any(x["name"] == c["name"] for x in chains):
+                    h._send(400, {"error": {"message": "name exists"}})
+                    return True
+                chains.append({"name": c["name"], "members": c["members"]})
+                h._send(200, {"chains": store.save_chains(chains)})
+                return True
+            if method == "DELETE" and len(parts) == 2:
+                import urllib.parse as _up
+                chains = [c for c in store.load_chains() if c["name"] != _up.unquote(parts[1])]
+                h._send(200, {"chains": store.save_chains(chains)})
+                return True
+        if parts[0] == "logs" and method == "GET" and len(parts) == 1:
+            import json as _j
+            import os as _o
+            import urllib.parse as _up
+            qs = _up.urlparse(h.path).query
+            try:
+                limit = max(1, min(500, int(_up.parse_qs(qs).get("limit", ["100"])[0])))
+            except ValueError:
+                limit = 100
+            p = _o.path.join(_o.environ.get("LITE_DATA_DIR") or _o.path.join(_o.path.expanduser("~"), ".omniroute-lite"), "requests.jsonl")
+            lines = []
+            try:
+                with open(p, "rb") as f:
+                    lines = f.read().splitlines()[-limit:]
+            except OSError:
+                pass
+            out = []
+            for ln in reversed(lines):
+                try:
+                    out.append(_j.loads(ln))
+                except ValueError:
+                    continue
+            h._send(200, {"logs": out})
             return True
-        if method == "POST" and len(parts) == 1:
-            body, err = h._body()
+        if parts[0] == "discover" and method == "POST" and len(parts) == 1:
+            body, err = _json(h)
             if err:
                 h._send(400, {"error": {"message": "bad json"}})
                 return True
-            chains = store.load_chains()
-            c = (body or {}).get("chain")
-            known = [t.get("name") for t in _list()]
-            err = store.validate_chain(c, known) if c else "chain required"
-            if err:
-                h._send(400, {"error": {"message": err}})
+            b = body or {}
+            ids, derr = providers.discover_models(b.get("kind", "openai"), b.get("base_url", ""), b.get("api_key", "-"))
+            if derr:
+                h._send(502, {"error": {"message": derr}})
                 return True
-            if any(x["name"] == c["name"] for x in chains):
-                h._send(400, {"error": {"message": "name exists"}})
+            h._send(200, {"models": ids})
+            return True
+        if parts[0] == "models" and method == "GET" and len(parts) == 1:
+            h._send(200, {"models": configured_model_map()})
+            return True
+        if parts[0] == "presets" and method == "GET" and len(parts) == 1:
+            h._send(200, {"presets": catalog_presets(), "generated": catalog.GENERATED})
+            return True
+        if parts[0] == "targets":
+            if method in ("GET", "POST", "PUT", "DELETE"):
+                body, err = (_json(h) if method in ("POST", "PUT") else ({}, None))
+                if err:
+                    h._send(400, {"error": {"message": "bad json"}})
+                    return True
+                code, obj = targets_crud(method, parts[1:], body)
+                h._send(code, obj)
                 return True
-            chains.append({"name": c["name"], "members": c["members"]})
-            h._send(200, {"chains": store.save_chains(chains)})
-            return True
-        if method == "DELETE" and len(parts) == 2:
-            import urllib.parse as _up
-            chains = [c for c in store.load_chains() if c["name"] != _up.unquote(parts[1])]
-            h._send(200, {"chains": store.save_chains(chains)})
-            return True
-    if parts[0] == "logs" and method == "GET" and len(parts) == 1:
-        import json as _j
-        import os as _o
-        import urllib.parse as _up
-        qs = _up.urlparse(h.path).query
+        return False
+    except OSError:
         try:
-            limit = max(1, min(500, int(_up.parse_qs(qs).get("limit", ["100"])[0])))
-        except ValueError:
-            limit = 100
-        p = _o.path.join(_o.environ.get("LITE_DATA_DIR") or _o.path.join(_o.path.expanduser("~"), ".omniroute-lite"), "requests.jsonl")
-        lines = []
-        try:
-            with open(p, "rb") as f:
-                lines = f.read().splitlines()[-limit:]
+            h._send(500, {"error": {"message": "save failed"}})
         except OSError:
             pass
-        out = []
-        for ln in reversed(lines):
-            try:
-                out.append(_j.loads(ln))
-            except ValueError:
-                continue
-        h._send(200, {"logs": out})
         return True
-    if parts[0] == "discover" and method == "POST" and len(parts) == 1:
-        body, err = h._body()
-        if err:
-            h._send(400, {"error": {"message": "bad json"}})
-            return True
-        b = body or {}
-        ids, derr = providers.discover_models(b.get("kind", "openai"), b.get("base_url", ""), b.get("api_key", "-"))
-        if derr:
-            h._send(502, {"error": {"message": derr}})
-            return True
-        h._send(200, {"models": ids})
-        return True
-    if parts[0] == "models" and method == "GET" and len(parts) == 1:
-        h._send(200, {"models": configured_model_map()})
-        return True
-    if parts[0] == "presets" and method == "GET" and len(parts) == 1:
-        h._send(200, {"presets": catalog_presets(), "generated": catalog.GENERATED})
-        return True
-    if parts[0] == "targets":
-        if method in ("GET", "POST", "PUT", "DELETE"):
-            body, err = (h._body() if method in ("POST", "PUT") else ({}, None))
-            if err:
-                h._send(400, {"error": {"message": "bad json"}})
-                return True
-            code, obj = targets_crud(method, parts[1:], body)
-            h._send(code, obj)
-            return True
-    return False
 
 
 AUTH_NOTE = {

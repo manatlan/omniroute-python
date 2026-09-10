@@ -280,6 +280,8 @@ document.getElementById('f-add').onclick = async () => {
   const res = await api('POST', '/admin/targets', {target: t});
   if (res.error) { alert(res.error.message); return; }
   document.querySelectorAll('#s-apis input').forEach(i => i.value = '');
+  document.getElementById('f-preset').value = '';
+  document.getElementById('f-kind').value = 'openai';
   loadApis();
 };
 document.getElementById('ch-add').onclick = async () => {
