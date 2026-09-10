@@ -361,4 +361,8 @@ def run(port=20128):
 
 
 if __name__ == "__main__":
-    run()
+    import sys as _s
+    try:
+        run(int(_s.argv[1]) if len(_s.argv) > 1 else 20128)
+    except ValueError:
+        raise SystemExit("usage: python3 lite.py [port]")
