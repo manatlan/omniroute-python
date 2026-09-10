@@ -79,7 +79,9 @@ Ported from the main project's executors to pure HTTP — no browser needed:
 | claude-web | `claude-web` | `sessionKey` value or full cookie | Model name as on claude.ai; same TLS caveat |
 
 Not portable, stated plainly: **deepseek-web** (needs a PoW hash-grinder too
-slow for stdlib Python), **gemini-web**/**chatgpt-web** (need a live browser).
+slow for stdlib Python — measured 857 hashes/sec vs challenges needing tens
+of thousands — so requests would take minutes), **gemini-web**/**chatgpt-web**
+(full Playwright automation in the original; no HTTP port exists).
 Their cards say so, and Test reports `blocked, needs browser` when a bot-wall
 answers instead of the API.
 
