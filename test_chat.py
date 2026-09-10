@@ -442,3 +442,38 @@ class TPayloadType(unittest.TestCase):
     def test_null_body_probe_400(self):
         code, _ = self._post("/v1/test/call", "null")
         self.assertEqual(code, 400)
+
+
+class TExactModel(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.port = cls.srv.server_address[1]
+        import threading
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        router._reset()
+
+    def test_no_silent_substitution(self):
+        import store as _s, providers as _p
+        o = (_s.load_targets, _s.load_chains, _p.call_target)
+        _s.load_targets = lambda *a: [{"name": "a", "models": ["x"]},
+                                      {"name": "b", "models": ["y"]}]
+        _s.load_chains = lambda: []
+        seen = []
+        _p.call_target = lambda t, p, timeout=30: (
+            seen.append((t["name"], p.get("model"))) or
+            (200, {}, b'{"choices":[{"message":{"content":"ok"}}]}'))
+        try:
+            c = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("POST", "/v1/chat/completions", json.dumps({"model": "y", "messages": []}),
+                      {"Content-Type": "application/json"})
+            self.assertEqual(c.getresponse().status, 200)
+            self.assertEqual(seen, [("b", "y")])  # a never touched, model exact
+        finally:
+            _s.load_targets, _s.load_chains, _p.call_target = o

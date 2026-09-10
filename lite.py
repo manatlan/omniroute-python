@@ -188,6 +188,10 @@ class Handler(BaseHTTPRequestHandler):
             unk = _unknown(model)
             if unk:
                 return self._send(404, unk)
+            if not model.startswith("chain:"):
+                targets = [t for t in targets if model in t.get("models", [])]
+                if not targets:
+                    return self._send(503, {"error": {"message": "no live targets for model"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
                 name = t.get("name", "")
@@ -272,9 +276,14 @@ class Handler(BaseHTTPRequestHandler):
             unk = _unknown(model)
             if unk:
                 return self._send(404, unk)
-            targets = [t for t in router.chain(store.load_targets(), model) if t.get("kind", "openai") != "anthropic"]
+            targets = [t for t in router.chain(store.load_targets(), model)
+                       if t.get("kind", "openai") != "anthropic" and model in t.get("models", [])]
             if not targets:
-                return self._send(400, {"error": {"message": "no embedding-capable target"}})
+                capable = [t for t in store.load_targets()
+                           if t.get("kind", "openai") != "anthropic" and model in t.get("models", [])]
+                if not capable:
+                    return self._send(400, {"error": {"message": "no embedding-capable target"}})
+                return self._send(503, {"error": {"message": "no live targets for model"}})
             last = (502, b'{"error":{"message":"all targets failed"}}')
             for t in targets:
                 code, hdrs, body = providers.embed_target(t, payload)
@@ -320,7 +329,8 @@ class Handler(BaseHTTPRequestHandler):
             unk = _unknown(model)
             if unk:
                 return self._send(404, unk)
-            t = targets[0]
+            serving = [t for t in targets if model in t.get("models", [])]
+            t = serving[0] if serving else targets[0]
             probe = {"model": model if model in t.get("models", []) else (t.get("models", [""])[0]), "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
             start = _t.time()
             code, hdrs, body = providers.call_target(t, probe)
